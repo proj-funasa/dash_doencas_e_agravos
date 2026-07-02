@@ -4,7 +4,11 @@ from dash import dcc, html, Input, Output
 import pandas as pd
 import plotly.graph_objects as go
 import trino
+import urllib3
 from dotenv import load_dotenv
+
+# Desabilitar warnings de SSL (certificado auto-assinado)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 load_dotenv()
 
@@ -16,12 +20,17 @@ TRINO_PASSWORD = os.environ["TRINO_PASSWORD"]
 # ── Conexão Trino ─────────────────────────────────────────────────────────────
 def query(sql):
     """Abre conexão, executa query, retorna DataFrame e fecha."""
+    import requests
+    session = requests.Session()
+    session.verify = False  # Ignorar certificado auto-assinado
+
     conn = trino.dbapi.connect(
         host=TRINO_HOST,
         port=TRINO_PORT,
         user=TRINO_USER,
         http_scheme='https',
         auth=trino.auth.BasicAuthentication(TRINO_USER, TRINO_PASSWORD),
+        http_session=session,
     )
     cur = conn.cursor()
     cur.execute(sql)
