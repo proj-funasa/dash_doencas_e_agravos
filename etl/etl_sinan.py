@@ -12,10 +12,14 @@ Execução:
     python etl_sinan.py gold       # só gold
 """
 
+import os
 import sys
 import trino
 import pandas as pd
 from sqlalchemy import create_engine, text
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ── Configuração ──────────────────────────────────────────────────────────────
 DOENCAS = [
@@ -30,13 +34,13 @@ ANO_FIM    = '2025'
 BATCH_SIZE = 2000  # linhas por INSERT
 
 # SQL Server (fonte)
-SQLSERVER_URL = "mssql+pymssql://public_sqlserver:funasa@funasadb.dataiesb.com/Saneamento"
+SQLSERVER_URL = os.environ["SQLSERVER_URL"]
 
 # Trino (destino)
-TRINO_HOST     = 'trino.dataiesb.com'
-TRINO_PORT     = 443
-TRINO_USER     = 'admin'
-TRINO_PASSWORD = 'JGtHJlSQV5TqDh8jJJ1U0u6WyaSUxeLW'
+TRINO_HOST     = os.environ["TRINO_HOST"]
+TRINO_PORT     = int(os.environ.get("TRINO_PORT", 443))
+TRINO_USER     = os.environ["TRINO_USER"]
+TRINO_PASSWORD = os.environ["TRINO_PASSWORD"]
 
 # Mapeamentos geográficos (usados no silver via Python para evitar JOIN cross-catalog)
 UF_POR_CODIGO = {

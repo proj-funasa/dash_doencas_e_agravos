@@ -1,0 +1,11 @@
+# Variáveis de ambiente / credenciais
+.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Sistema
+.DS_Store

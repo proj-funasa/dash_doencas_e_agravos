@@ -1,9 +1,13 @@
 """
 Retoma o bronze a partir de onde parou — pula tabelas que já existem no seaweedfs.bronze
 """
+import os
 import trino
 import pandas as pd
 from sqlalchemy import create_engine
+from dotenv import load_dotenv
+
+load_dotenv()
 
 DOENCAS = [
     'botulismo', 'chagas', 'colera', 'dengue_antigo', 'dengue',
@@ -15,11 +19,11 @@ ANO_INICIO = '2007'
 ANO_FIM    = '2025'
 BATCH_SIZE = 2000
 
-SQLSERVER_URL  = "mssql+pymssql://public_sqlserver:funasa@funasadb.dataiesb.com/Saneamento"
-TRINO_HOST     = 'trino.dataiesb.com'
-TRINO_PORT     = 443
-TRINO_USER     = 'admin'
-TRINO_PASSWORD = 'JGtHJlSQV5TqDh8jJJ1U0u6WyaSUxeLW'
+SQLSERVER_URL  = os.environ["SQLSERVER_URL"]
+TRINO_HOST     = os.environ["TRINO_HOST"]
+TRINO_PORT     = int(os.environ.get("TRINO_PORT", 443))
+TRINO_USER     = os.environ["TRINO_USER"]
+TRINO_PASSWORD = os.environ["TRINO_PASSWORD"]
 
 
 def log(msg):

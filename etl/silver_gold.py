@@ -1,8 +1,12 @@
 """
 Silver e Gold — roda CTAS dentro do seaweedfs (sem SQL Server)
 """
+import os
 import sys
 import trino
+from dotenv import load_dotenv
+
+load_dotenv()
 
 DOENCAS = [
     'botulismo', 'chagas', 'colera', 'dengue_antigo', 'dengue',
@@ -10,10 +14,10 @@ DOENCAS = [
     'toxo_congenita', 'toxo_gestacional'
 ]
 
-TRINO_HOST     = 'trino.dataiesb.com'
-TRINO_PORT     = 443
-TRINO_USER     = 'admin'
-TRINO_PASSWORD = 'JGtHJlSQV5TqDh8jJJ1U0u6WyaSUxeLW'
+TRINO_HOST     = os.environ["TRINO_HOST"]
+TRINO_PORT     = int(os.environ.get("TRINO_PORT", 443))
+TRINO_USER     = os.environ["TRINO_USER"]
+TRINO_PASSWORD = os.environ["TRINO_PASSWORD"]
 
 
 def log(msg):

@@ -1,18 +1,27 @@
+import os
 import dash
 from dash import dcc, html, Input, Output
 import pandas as pd
 import plotly.graph_objects as go
 import trino
+from dotenv import load_dotenv
+
+load_dotenv()
+
+TRINO_HOST     = os.environ["TRINO_HOST"]
+TRINO_PORT     = int(os.environ.get("TRINO_PORT", 443))
+TRINO_USER     = os.environ["TRINO_USER"]
+TRINO_PASSWORD = os.environ["TRINO_PASSWORD"]
 
 # ── Conexão Trino ─────────────────────────────────────────────────────────────
 def query(sql):
     """Abre conexão, executa query, retorna DataFrame e fecha."""
     conn = trino.dbapi.connect(
-        host='trino.dataiesb.com',
-        port=443,
-        user='admin',
+        host=TRINO_HOST,
+        port=TRINO_PORT,
+        user=TRINO_USER,
         http_scheme='https',
-        auth=trino.auth.BasicAuthentication('admin', 'JGtHJlSQV5TqDh8jJJ1U0u6WyaSUxeLW'),
+        auth=trino.auth.BasicAuthentication(TRINO_USER, TRINO_PASSWORD),
     )
     cur = conn.cursor()
     cur.execute(sql)

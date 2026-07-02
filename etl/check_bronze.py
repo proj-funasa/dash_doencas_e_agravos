@@ -1,4 +1,8 @@
+import os
 import trino
+from dotenv import load_dotenv
+
+load_dotenv()
 
 DOENCAS = [
     'botulismo', 'chagas', 'colera', 'dengue_antigo', 'dengue',
@@ -7,9 +11,11 @@ DOENCAS = [
 ]
 
 conn = trino.dbapi.connect(
-    host='trino.dataiesb.com', port=443, user='admin',
+    host=os.environ["TRINO_HOST"],
+    port=int(os.environ.get("TRINO_PORT", 443)),
+    user=os.environ["TRINO_USER"],
     http_scheme='https',
-    auth=trino.auth.BasicAuthentication('admin', 'JGtHJlSQV5TqDh8jJJ1U0u6WyaSUxeLW'),
+    auth=trino.auth.BasicAuthentication(os.environ["TRINO_USER"], os.environ["TRINO_PASSWORD"]),
 )
 cur = conn.cursor()
 
