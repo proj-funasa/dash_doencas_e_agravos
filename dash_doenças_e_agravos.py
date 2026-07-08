@@ -4,33 +4,18 @@ from dash import dcc, html, Input, Output
 import pandas as pd
 import plotly.graph_objects as go
 import trino
-import urllib3
-from dotenv import load_dotenv
 
-# Desabilitar warnings de SSL (certificado auto-assinado)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+TRINO_HOST = os.getenv("TRINO_HOST", "trino.trino.svc.cluster.local")
+TRINO_PORT = int(os.getenv("TRINO_PORT", "8080"))
+TRINO_USER = os.getenv("TRINO_USER", "funasa_reader")
 
-load_dotenv()
-
-TRINO_HOST     = os.environ["TRINO_HOST"]
-TRINO_PORT     = int(os.environ.get("TRINO_PORT", 443))
-TRINO_USER     = os.environ["TRINO_USER"]
-TRINO_PASSWORD = os.environ["TRINO_PASSWORD"]
-
-# ── Conexão Trino ─────────────────────────────────────────────────────────────
+# ── Conexão Trino (interna k8s) ──────────────────────────────────────────────
 def query(sql):
     """Abre conexão, executa query, retorna DataFrame e fecha."""
-    import requests
-    session = requests.Session()
-    session.verify = False  # Ignorar certificado auto-assinado
-
     conn = trino.dbapi.connect(
         host=TRINO_HOST,
         port=TRINO_PORT,
         user=TRINO_USER,
-        http_scheme='https',
-        auth=trino.auth.BasicAuthentication(TRINO_USER, TRINO_PASSWORD),
-        http_session=session,
     )
     cur = conn.cursor()
     cur.execute(sql)
@@ -158,7 +143,7 @@ fig_barras.update_layout(
 )
 
 # ── App ───────────────────────────────────────────────────────────────────────
-app    = dash.Dash(__name__, title="Doenças e Agravos — SINAN", suppress_callback_exceptions=True)
+app    = dash.Dash(__name__, title="Doenças e Agravos — SINAN", suppress_callback_exceptions=True, url_base_pathname="/doencas-agravos/")
 server = app.server
 
 kpis = [_kpi(nomes_exibicao[row['doenca']], row['total_casos'], COR_POR_DOENCA[row['doenca']])
@@ -410,4 +395,4 @@ def atualizar_municipios(doenca_sel, ano_sel, regiao_sel, uf_sel):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=8051)
+    app.run(debug=True, port=8050)

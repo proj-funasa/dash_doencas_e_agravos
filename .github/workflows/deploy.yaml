@@ -1,0 +1,53 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPO: 248189947068.dkr.ecr.us-east-1.amazonaws.com/dash-doencas-agravos
+  DEPLOYMENT: dash-doencas-agravos
+  NAMESPACE: dashs
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: trufflesecurity/trufflehog@v3.82.13
+      with:
+        extra_args: --only-verified
+
+  deploy:
+    needs: secret-scan
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to ECR
+      run: aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin 248189947068.dkr.ecr.$AWS_REGION.amazonaws.com
+
+    - name: Build & push
+      run: |
+        docker build -t $ECR_REPO:${{ github.sha }} -t $ECR_REPO:latest .
+        docker push $ECR_REPO:${{ github.sha }}
+        docker push $ECR_REPO:latest
+
+    - name: Deploy to EKS
+      run: |
+        aws eks update-kubeconfig --name dataiesb-cluster --region $AWS_REGION
+        kubectl apply -f k8s/deployment.yaml
+        kubectl set image deployment/$DEPLOYMENT -n $NAMESPACE $DEPLOYMENT=$ECR_REPO:${{ github.sha }}
+        kubectl rollout status deployment/$DEPLOYMENT -n $NAMESPACE --timeout=120s

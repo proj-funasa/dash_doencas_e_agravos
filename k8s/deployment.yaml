@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dash-doencas-agravos
+  namespace: dashs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dash-doencas-agravos
+  template:
+    metadata:
+      labels:
+        app: dash-doencas-agravos
+    spec:
+      serviceAccountName: dataiesb-dashs
+      containers:
+        - name: dash-doencas-agravos
+          image: 248189947068.dkr.ecr.us-east-1.amazonaws.com/dash-doencas-agravos:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8050
+          livenessProbe:
+            httpGet:
+              path: /doencas-agravos/
+              port: 8050
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /doencas-agravos/
+              port: 8050
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dash-doencas-agravos
+  namespace: dashs
+spec:
+  selector:
+    app: dash-doencas-agravos
+  ports:
+    - port: 8050
+      targetPort: 8050
