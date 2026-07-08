@@ -158,7 +158,8 @@ fig_barras.update_layout(
 )
 
 # ── App ───────────────────────────────────────────────────────────────────────
-app    = dash.Dash(__name__, title="Doenças e Agravos — SINAN", suppress_callback_exceptions=True)
+app    = dash.Dash(__name__, title="Doenças e Agravos — SINAN", suppress_callback_exceptions=True,
+                  requests_pathname_prefix=os.environ.get("DASH_PREFIX", "/"))
 server = app.server
 
 kpis = [_kpi(nomes_exibicao[row['doenca']], row['total_casos'], COR_POR_DOENCA[row['doenca']])
