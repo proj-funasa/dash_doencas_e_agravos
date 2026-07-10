@@ -1,0 +1,101 @@
+/* ── Responsividade Mobile ─────────────────────────────────────────────────── */
+
+/* Viewport meta (Dash não adiciona por padrão) */
+@media screen and (max-width: 768px) {
+
+    /* Header: empilha verticalmente */
+    #header-container {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        padding: 16px 16px !important;
+        gap: 12px;
+    }
+
+    #header-container img {
+        height: 36px !important;
+    }
+
+    #header-titulo h1 {
+        font-size: 16px !important;
+    }
+
+    #header-titulo p {
+        font-size: 10px !important;
+    }
+
+    #header-badge {
+        align-self: flex-end;
+        padding: 8px 14px !important;
+    }
+
+    /* Conteúdo geral: menos padding */
+    #conteudo-principal {
+        padding: 16px 12px !important;
+    }
+
+    /* KPI cards: grid 2 colunas */
+    #kpi-container {
+        display: grid !important;
+        grid-template-columns: 1fr 1fr !important;
+        gap: 8px !important;
+    }
+
+    #kpi-container > div {
+        min-width: unset !important;
+        padding: 12px 14px !important;
+    }
+
+    #kpi-container > div p:first-child {
+        font-size: 18px !important;
+    }
+
+    #kpi-container > div p:last-child {
+        font-size: 9px !important;
+    }
+
+    /* Cards */
+    .card-container {
+        padding: 14px 12px !important;
+    }
+
+    /* Filtros: empilha */
+    #filtros-container {
+        flex-direction: column !important;
+        gap: 10px !important;
+    }
+
+    #filtros-container > div {
+        width: 100% !important;
+    }
+
+    #filtros-container .Select {
+        width: 100% !important;
+    }
+
+    /* Gráfico + Tabela: empilha verticalmente */
+    #grafico-tabela-container {
+        flex-direction: column !important;
+        gap: 16px !important;
+    }
+
+    #grafico-tabela-container > div {
+        flex: unset !important;
+        width: 100% !important;
+        padding-left: 0 !important;
+        border-left: none !important;
+    }
+
+    /* Tabela scroll horizontal se necessário */
+    #tabela-municipios {
+        border-left: none !important;
+        padding-left: 0 !important;
+        overflow-x: auto !important;
+    }
+}
+
+/* Telas muito pequenas (< 400px) */
+@media screen and (max-width: 400px) {
+    #kpi-container {
+        grid-template-columns: 1fr !important;
+    }
+}

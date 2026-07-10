@@ -144,7 +144,9 @@ fig_barras.update_layout(
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app    = dash.Dash(__name__, title="Doenças e Agravos — SINAN", suppress_callback_exceptions=True,
-                  requests_pathname_prefix=os.environ.get("DASH_PREFIX", "/doencas-agravos/"))
+                  url_base_pathname=os.environ.get("DASH_PREFIX", "/doencas-agravos/"),
+                  meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1.0"}],
+                  assets_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets"))
 server = app.server
 
 kpis = [_kpi(nomes_exibicao[row['doenca']], row['total_casos'], COR_POR_DOENCA[row['doenca']])
@@ -155,31 +157,33 @@ app.layout = html.Div(
     children=[
         # ── Header ────────────────────────────────────────────────────────────
         html.Div([
-            html.Img(src="/assets/logo_funasa.png", style={"height": "50px", "marginRight": "20px"}),
             html.Div([
-                html.P("FUNASA", style={"fontSize": 10, "color": "#8BAFC8",
-                                        "margin": "0 0 2px 0", "letterSpacing": "0.1em", "fontWeight": 600}),
-                html.H1("Doenças e Agravos — Casos Notificados",
-                        style={"fontSize": 22, "fontWeight": 700, "color": "#fff", "margin": 0}),
-                html.P("Total de casos notificados por doença (2007–2025) · Fonte: SINAN/DATASUS",
-                       style={"fontSize": 12, "color": "#8BAFC8", "margin": "4px 0 0 0"}),
-            ], style={"flex": 1}),
+                html.Img(src=app.get_asset_url("logo_funasa.png"), style={"height": "50px", "marginRight": "20px"}),
+                html.Div([
+                    html.P("FUNASA", style={"fontSize": 10, "color": "#8BAFC8",
+                                            "margin": "0 0 2px 0", "letterSpacing": "0.1em", "fontWeight": 600}),
+                    html.H1("Doenças e Agravos — Casos Notificados",
+                            style={"fontSize": 22, "fontWeight": 700, "color": "#fff", "margin": 0}),
+                    html.P("Total de casos notificados por doença (2007–2025) · Fonte: SINAN/DATASUS",
+                           style={"fontSize": 12, "color": "#8BAFC8", "margin": "4px 0 0 0"}),
+                ], id="header-titulo", style={"flex": 1}),
+            ], style={"display": "flex", "alignItems": "center", "flex": 1}),
             html.Div([
                 html.P(f"{len(doencas)}", style={"fontSize": 28, "fontWeight": 700,
                                                   "color": "#fff", "margin": 0, "textAlign": "center"}),
                 html.P("DOENÇAS", style={"fontSize": 10, "color": "#8BAFC8", "margin": 0,
                                           "textAlign": "center", "letterSpacing": "0.05em"}),
-            ], style={"backgroundColor": "#2d4a6b", "borderRadius": 8, "padding": "12px 20px"}),
-        ], style={"backgroundColor": COR_HEADER, "padding": "20px 32px",
+            ], id="header-badge", style={"backgroundColor": "#2d4a6b", "borderRadius": 8, "padding": "12px 20px"}),
+        ], id="header-container", style={"backgroundColor": COR_HEADER, "padding": "20px 32px",
                   "display": "flex", "alignItems": "center", "justifyContent": "space-between"}),
 
         # ── Conteúdo ──────────────────────────────────────────────────────────
-        html.Div(style={"padding": "24px 32px"}, children=[
+        html.Div(id="conteudo-principal", style={"padding": "24px 32px"}, children=[
 
             html.P("Total de casos notificados por doença no período de 2007 a 2025",
                    style={"fontSize": 14, "fontWeight": 600, "color": "#2d3748", "marginBottom": 12}),
 
-            html.Div(kpis, style={"display": "flex", "gap": 12, "marginBottom": 20, "flexWrap": "wrap"}),
+            html.Div(kpis, id="kpi-container", style={"display": "flex", "gap": 12, "marginBottom": 20, "flexWrap": "wrap"}),
 
             _card([
                 _titulo("Total de Casos por Doença (2007–2025)"),
@@ -232,7 +236,7 @@ app.layout = html.Div(
                                 style={"width": "120px", "fontSize": 13},
                             ),
                         ]),
-                    ], style={"display": "flex", "gap": 16, "marginTop": 16,
+                    ], id="filtros-container", style={"display": "flex", "gap": 16, "marginTop": 16,
                                "marginBottom": 20, "flexWrap": "wrap"}),
 
                     # Gráfico + Tabela
@@ -245,7 +249,7 @@ app.layout = html.Div(
                             html.P(id="tabela-info",
                                    style={"fontSize": 11, "color": "#9ca3af", "margin": "8px 0 0 0"}),
                         ], style={"flex": 1, "paddingLeft": "20px"}),
-                    ], style={"display": "flex", "gap": 20, "alignItems": "flex-start"}),
+                    ], id="grafico-tabela-container", style={"display": "flex", "gap": 20, "alignItems": "flex-start"}),
                 ]),
             ]),
         ]),
