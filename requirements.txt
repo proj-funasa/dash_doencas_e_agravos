@@ -3,3 +3,6 @@ pandas
 plotly
 trino
 gunicorn
+folium
+branca
+numpy

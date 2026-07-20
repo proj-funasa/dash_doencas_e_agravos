@@ -8,7 +8,6 @@ import json
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import requests
 import trino
 
 TRINO_HOST = os.getenv("TRINO_HOST", "trino.trino.svc.cluster.local")
@@ -100,11 +99,11 @@ print(f"[DASH] Pronto — {len(df_mun)} municípios carregados. Subindo servidor
 # ── Preparar dados agregados por UF (para o mapa coroplético) ─────────────────
 df_uf_doenca = df_mun.groupby(['uf', 'doenca'], as_index=False)['total_casos'].sum()
 
-# ── Carregar GeoJSON dos estados do Brasil ────────────────────────────────────
+# ── Carregar GeoJSON dos estados do Brasil (arquivo local) ────────────────────
 print("[DASH] Carregando GeoJSON dos estados...", flush=True)
-GEOJSON_URL = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson"
-_geojson_response = requests.get(GEOJSON_URL)
-GEOJSON_ESTADOS = _geojson_response.json()
+_geojson_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "brazil-states.geojson")
+with open(_geojson_path, "r", encoding="utf-8") as _f:
+    GEOJSON_ESTADOS = json.load(_f)
 
 # Calcula bounds do Brasil a partir do GeoJSON
 _all_coords = []
