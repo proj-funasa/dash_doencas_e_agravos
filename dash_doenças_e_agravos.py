@@ -1,8 +1,14 @@
 import os
+import copy
 import dash
 from dash import dcc, html, Input, Output
+import branca.colormap as cm
+import folium
+import json
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import requests
 import trino
 
 TRINO_HOST = os.getenv("TRINO_HOST", "trino.trino.svc.cluster.local")
@@ -90,6 +96,177 @@ df_mun['uf']               = df_mun['codigo_municipio'].str[:2].map(UF_POR_CODIG
 df_mun['regiao']           = df_mun['uf'].map(REGIAO_POR_UF)
 
 print(f"[DASH] Pronto — {len(df_mun)} municípios carregados. Subindo servidor...", flush=True)
+
+# ── Preparar dados agregados por UF (para o mapa coroplético) ─────────────────
+df_uf_doenca = df_mun.groupby(['uf', 'doenca'], as_index=False)['total_casos'].sum()
+
+# ── Carregar GeoJSON dos estados do Brasil ────────────────────────────────────
+print("[DASH] Carregando GeoJSON dos estados...", flush=True)
+GEOJSON_URL = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson"
+_geojson_response = requests.get(GEOJSON_URL)
+GEOJSON_ESTADOS = _geojson_response.json()
+
+# Calcula bounds do Brasil a partir do GeoJSON
+_all_coords = []
+for _feature in GEOJSON_ESTADOS["features"]:
+    _geom = _feature["geometry"]
+    if _geom["type"] == "Polygon":
+        for _ring in _geom["coordinates"]:
+            _all_coords.extend(_ring)
+    elif _geom["type"] == "MultiPolygon":
+        for _polygon in _geom["coordinates"]:
+            for _ring in _polygon:
+                _all_coords.extend(_ring)
+BOUNDS_BRASIL = [[min(c[1] for c in _all_coords), min(c[0] for c in _all_coords)],
+                 [max(c[1] for c in _all_coords), max(c[0] for c in _all_coords)]]
+
+
+# ── Função para gerar o mapa Folium por doença ───────────────────────────────
+def gerar_mapa_uf(doenca_sel):
+    """Gera HTML de mapa coroplético por UF para uma doença específica."""
+    dados = df_uf_doenca[df_uf_doenca['doenca'] == doenca_sel].copy()
+    dados_dict = dados.set_index('uf')['total_casos'].to_dict()
+
+    # Cópia do GeoJSON para injetar propriedades
+    geojson = copy.deepcopy(GEOJSON_ESTADOS)
+
+    for feature in geojson["features"]:
+        sigla = feature["properties"]["sigla"]
+        casos = dados_dict.get(sigla, 0)
+        feature["properties"]["total_casos"] = f"{casos:,.0f}".replace(",", ".")
+        feature["properties"]["total_casos_raw"] = casos
+
+    # Valores para a escala
+    valores = [dados_dict.get(uf, 0) for uf in REGIAO_POR_UF.keys()]
+    vmin = 0
+    vmax = max(valores) if max(valores) > 0 else 1
+
+    # Paleta sequencial (branco → laranja → vermelho escuro)
+    colormap = cm.LinearColormap(
+        colors=["#FFF5F0", "#FEE0D2", "#FCBBA1", "#FC9272", "#FB6A4A", "#DE2D26", "#A50F15"],
+        vmin=vmin,
+        vmax=vmax,
+        caption=f"Total de Casos — {nomes_exibicao[doenca_sel]} (2007–2025)",
+    )
+
+    # Mapa sem tiles (fundo branco, apenas Brasil)
+    m = folium.Map(
+        location=[-14.2350, -51.9253],
+        zoom_start=4,
+        tiles=None,
+        zoom_control=False,
+    )
+    m.fit_bounds(BOUNDS_BRASIL, padding=[10, 10])
+    colormap.add_to(m)
+
+    def style_function(feature):
+        sigla = feature["properties"]["sigla"]
+        valor = dados_dict.get(sigla, 0)
+        return {
+            "fillColor": colormap(valor),
+            "fillOpacity": 0.82,
+            "weight": 1.5,
+            "color": "#ffffff",
+            "opacity": 1,
+        }
+
+    # Borda externa do Brasil
+    folium.GeoJson(
+        geojson,
+        style_function=lambda x: {
+            "fillOpacity": 0,
+            "weight": 2.5,
+            "color": "#cbd5e0",
+            "opacity": 0.8,
+        },
+        name="contorno_brasil",
+    ).add_to(m)
+
+    # Camada principal + tooltip
+    folium.GeoJson(
+        geojson,
+        style_function=style_function,
+        tooltip=folium.GeoJsonTooltip(
+            fields=["name", "sigla", "total_casos"],
+            aliases=["Estado:", "UF:", "Total de Casos:"],
+            localize=True,
+            sticky=True,
+            style="""
+                background-color: #ffffff;
+                border: none;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                color: #2d3748;
+                font-family: 'Inter', sans-serif;
+                font-size: 13px;
+                padding: 12px 16px;
+                line-height: 1.6;
+            """,
+        ),
+        highlight_function=lambda x: {
+            "weight": 2.5,
+            "color": "#2d3748",
+            "fillOpacity": 0.9,
+        },
+    ).add_to(m)
+
+    # Injeta CSS para fundo branco e layout responsivo
+    map_html = m._repr_html_()
+    inject_css = """
+    <style>
+        html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            overflow: hidden;
+            background-color: #ffffff;
+        }
+        .folium-map {
+            position: absolute !important;
+            top: 20px !important;
+            left: 20px !important;
+            width: calc(100% - 40px) !important;
+            height: calc(100% - 40px) !important;
+            background-color: #ffffff !important;
+        }
+        #map, [id^="map_"] {
+            width: 100% !important;
+            height: 100% !important;
+            background-color: #ffffff !important;
+        }
+        .leaflet-container {
+            background-color: #ffffff !important;
+        }
+        .legend {
+            background: white !important;
+            border-radius: 6px !important;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12) !important;
+            padding: 8px 12px !important;
+            font-family: 'Inter', sans-serif !important;
+            font-size: 11px !important;
+        }
+        .caption {
+            font-family: 'Inter', sans-serif !important;
+            font-size: 11px !important;
+            font-weight: 600 !important;
+            color: #4a5568 !important;
+        }
+        @media (max-width: 600px) {
+            .legend {
+                transform: scale(0.65) !important;
+                transform-origin: bottom left !important;
+            }
+        }
+    </style>
+    """
+    map_html = map_html.replace('</head>', inject_css + '</head>')
+    return map_html
+
+
+# Pré-gerar mapa padrão (dengue) para carregamento inicial
+print("[DASH] Gerando mapa inicial (dengue)...", flush=True)
+mapa_inicial_html = gerar_mapa_uf("dengue")
 
 # ── Cores ─────────────────────────────────────────────────────────────────────
 COR_HEADER = "#1B3A5C"
@@ -190,6 +367,32 @@ app.layout = html.Div(
                 dcc.Graph(figure=fig_barras, config={"displayModeBar": False}),
             ]),
 
+            # ── Mapa Coroplético por UF ───────────────────────────────────────
+            html.Div(style={"marginTop": 24}, children=[
+                html.Div(style={
+                    "backgroundColor": "#ffffff", "borderRadius": 8,
+                    "padding": "20px 24px", "boxShadow": "0 2px 8px rgba(0,0,0,0.12)",
+                }, children=[
+                    html.Div([
+                        _titulo("Mapa de Casos Notificados por UF"),
+                        html.Div([
+                            html.Label("Doença", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568", "marginRight": 8}),
+                            dcc.Dropdown(
+                                id="filtro-doenca-mapa",
+                                options=[{"label": nomes_exibicao[d], "value": d} for d in doencas],
+                                value="dengue", clearable=False,
+                                style={"width": "180px", "fontSize": 13},
+                            ),
+                        ], style={"display": "flex", "alignItems": "center"}),
+                    ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": 12}),
+                    html.Iframe(
+                        id="mapa-uf-iframe",
+                        srcDoc=mapa_inicial_html,
+                        style={"width": "100%", "height": "500px", "border": "none", "borderRadius": "8px"},
+                    ),
+                ]),
+            ]),
+
             # ── Análise por Município ─────────────────────────────────────────
             html.Div(style={"marginTop": 24}, children=[
                 _card([
@@ -204,16 +407,6 @@ app.layout = html.Div(
                                 options=[{"label": nomes_exibicao[d], "value": d} for d in doencas],
                                 value="dengue", clearable=False,
                                 style={"width": "180px", "fontSize": 13},
-                            ),
-                        ]),
-                        html.Div([
-                            html.Label("Ano", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
-                            dcc.Dropdown(
-                                id="filtro-ano",
-                                options=[{"label": "Todos", "value": "Todos"}] +
-                                        [{"label": a, "value": a} for a in anos],
-                                value="Todos", clearable=False,
-                                style={"width": "120px", "fontSize": 13},
                             ),
                         ]),
                         html.Div([
@@ -257,6 +450,15 @@ app.layout = html.Div(
 )
 
 
+# ── Callback: Atualiza mapa coroplético por UF ──────────────────────────────
+@app.callback(
+    Output("mapa-uf-iframe", "srcDoc"),
+    Input("filtro-doenca-mapa", "value"),
+)
+def atualizar_mapa_uf(doenca_sel):
+    return gerar_mapa_uf(doenca_sel)
+
+
 # ── Callback: UF cascateia com região ────────────────────────────────────────
 @app.callback(
     Output("filtro-uf", "options"),
@@ -271,73 +473,26 @@ def atualizar_opcoes_uf(regiao_sel):
     return [{"label": "Todas", "value": "Todos"}] + [{"label": u, "value": u} for u in lista], "Todos"
 
 
-# ── Callback: Gráfico + Tabela — query sob demanda no gold ───────────────────
+# ── Callback: Gráfico + Tabela — filtra em memória (sem filtro de ano) ────────
 @app.callback(
     Output("grafico-top10", "children"),
     Output("tabela-municipios", "children"),
     Output("tabela-info", "children"),
     Input("filtro-doenca", "value"),
-    Input("filtro-ano", "value"),
     Input("filtro-regiao", "value"),
     Input("filtro-uf", "value"),
 )
-def atualizar_municipios(doenca_sel, ano_sel, regiao_sel, uf_sel):
+def atualizar_municipios(doenca_sel, regiao_sel, uf_sel):
 
-    if ano_sel == "Todos":
-        # ── Filtra em memória — sem query ao banco ────────────────────────
-        df = df_mun[df_mun['doenca'] == doenca_sel].copy()
+    # ── Filtra em memória — dados totais sem recorte de ano ───────────
+    df = df_mun[df_mun['doenca'] == doenca_sel].copy()
 
-        if regiao_sel != "Todos":
-            df = df[df['regiao'] == regiao_sel]
-        if uf_sel != "Todos":
-            df = df[df['uf'] == uf_sel]
+    if regiao_sel != "Todos":
+        df = df[df['regiao'] == regiao_sel]
+    if uf_sel != "Todos":
+        df = df[df['uf'] == uf_sel]
 
-        df = df.dropna(subset=['nome_municipio']).sort_values("total_casos", ascending=False)
-
-    else:
-        # ── Query filtrada no gold com ano específico ─────────────────────
-        filtros = [f"doenca = '{doenca_sel}'", f"ano = '{ano_sel}'"]
-
-        if regiao_sel != "Todos":
-            ufs_regiao = UF_POR_REGIAO.get(regiao_sel, [])
-            if ufs_regiao:
-                lista = ", ".join(f"'{u}'" for u in ufs_regiao)
-                filtros.append(f"SUBSTR(codigo_municipio, 1, 2) IN ({lista})")
-
-        if uf_sel != "Todos":
-            cod_uf = [k for k, v in UF_POR_CODIGO.items() if v == uf_sel]
-            if cod_uf:
-                filtros.append(f"SUBSTR(codigo_municipio, 1, 2) = '{cod_uf[0]}'")
-
-        where = " AND ".join(filtros)
-        sql = f"""
-            SELECT
-                codigo_municipio,
-                nome_municipio,
-                SUBSTR(codigo_municipio, 1, 2) AS cod_uf,
-                SUM(casos_ano) AS total_casos
-            FROM seaweedfs.gold.casos_por_municipio_ano
-            WHERE {where}
-            GROUP BY codigo_municipio, nome_municipio
-            ORDER BY total_casos DESC
-        """
-        df = query(sql)
-        if df.empty:
-            fig_vazio = go.Figure()
-            fig_vazio.update_layout(
-                plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
-                xaxis={"visible": False}, yaxis={"visible": False},
-                annotations=[{"text": "Nenhum dado encontrado", "showarrow": False,
-                               "font": {"size": 14, "color": "#9ca3af"}}],
-                height=380,
-            )
-            return dcc.Graph(figure=fig_vazio, config={"displayModeBar": False}), [], "0 municípios encontrados"
-
-        df['total_casos']      = pd.to_numeric(df['total_casos'], errors='coerce').fillna(0).astype(int)
-        df['uf']               = df['cod_uf'].map(UF_POR_CODIGO)
-        df['regiao']           = df['uf'].map(REGIAO_POR_UF)
-        df['nome_municipio']   = df['nome_municipio'].str.title()
-        df = df.sort_values("total_casos", ascending=False)
+    df = df.dropna(subset=['nome_municipio']).sort_values("total_casos", ascending=False)
 
     if df.empty:
         fig_vazio = go.Figure()
