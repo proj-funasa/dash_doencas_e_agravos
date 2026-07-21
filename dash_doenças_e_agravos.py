@@ -89,23 +89,6 @@ df_mun['total_casos']      = pd.to_numeric(df_mun['total_casos'], errors='coerce
 df_mun['uf']               = df_mun['codigo_municipio'].str[:2].map(UF_POR_CODIGO)
 df_mun['regiao']           = df_mun['uf'].map(REGIAO_POR_UF)
 
-print("[DASH] Carregando dados do mapa...", flush=True)
-df_mapa = query("""
-    SELECT
-        c.codigo_municipio,
-        c.nome_municipio,
-        c.doenca,
-        c.total_casos,
-        p.latitude,
-        p.longitude
-    FROM seaweedfs.gold.casos_por_municipio c
-    LEFT JOIN seaweedfs.gold.painel_municipios p
-        ON c.codigo_municipio = p.codigo_municipio
-""")
-df_mapa['total_casos'] = pd.to_numeric(df_mapa['total_casos'], errors='coerce').fillna(0).astype(int)
-df_mapa = df_mapa.dropna(subset=['latitude', 'longitude'])
-print(f"[DASH] Mapa pronto — {len(df_mapa)} município(s) com coordenada.", flush=True)
-
 print(f"[DASH] Pronto — {len(df_mun)} municípios carregados. Subindo servidor...", flush=True)
 
 # ── Cores ─────────────────────────────────────────────────────────────────────
@@ -259,25 +242,6 @@ app.layout = html.Div(
                     ], id="grafico-tabela-container", style={"display": "flex", "gap": 20, "alignItems": "flex-start"}),
                 ]),
             ]),
-
-            # ── Mapa por Município ────────────────────────────────────────────
-            html.Div(style={"marginTop": 24}, children=[
-                _card([
-                    _titulo("Mapa de Casos por Município"),
-                    html.Div([
-                        html.Div([
-                            html.Label("Doença", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
-                            dcc.Dropdown(
-                                id="filtro-doenca-mapa",
-                                options=[{"label": nomes_exibicao[d], "value": d} for d in doencas],
-                                value="dengue", clearable=False,
-                                style={"width": "180px", "fontSize": 13},
-                            ),
-                        ]),
-                    ], id="filtro-mapa-container", style={"display": "flex", "gap": 16, "marginTop": 16, "marginBottom": 20}),
-                    dcc.Graph(id="mapa-municipios", config={"displayModeBar": False}),
-                ]),
-            ]),
         ]),
     ]
 )
@@ -378,39 +342,5 @@ def atualizar_municipios(doenca_sel, regiao_sel, uf_sel):
     return grafico, tabela, info
 
 
-# ── Callback: Mapa por Município ──────────────────────────────────────────────
-@app.callback(
-    Output("mapa-municipios", "figure"),
-    Input("filtro-doenca-mapa", "value"),
-)
-def atualizar_mapa(doenca_sel):
-    df = df_mapa[df_mapa['doenca'] == doenca_sel]
-
-    max_casos = df['total_casos'].max() or 1
-    tamanhos = 6 + (df['total_casos'] / max_casos * 24)
-
-    fig = go.Figure(go.Scattermapbox(
-        lat=df['latitude'],
-        lon=df['longitude'],
-        mode='markers',
-        marker=dict(
-            size=tamanhos,
-            color=df['total_casos'],
-            colorscale='Plasma',
-            showscale=True,
-            colorbar=dict(title="Casos"),
-            opacity=0.8,
-        ),
-        text=df['nome_municipio'] + " — " + df['total_casos'].astype(str) + " casos",
-        hoverinfo='text',
-    ))
-    fig.update_layout(
-        mapbox=dict(style="carto-positron", center=dict(lat=-14.2, lon=-51.9), zoom=3.2),
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=560,
-    )
-    return fig
-
-
 if __name__ == "__main__":
-    app.run(debug=False, host="0.0.0.0", port=8050)
+    app.run(debug=True, port=8050)
