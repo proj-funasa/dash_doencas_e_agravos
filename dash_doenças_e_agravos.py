@@ -101,8 +101,9 @@ df_mun['regiao']           = df_mun['uf'].map(REGIAO_POR_UF)
 
 print(f"[DASH] Pronto — {len(df_mun)} registros carregados. Subindo servidor...", flush=True)
 
-# ── Coordenadas dos municípios e Mapa de Calor ────────────────────────────────
+# ── Coordenadas dos municípios e Mapa ─────────────────────────────────────────
 import plotly.express as px
+import numpy as np
 
 print("[DASH] Carregando coordenadas dos municípios...", flush=True)
 COORDS_URL = "https://raw.githubusercontent.com/kelvins/municipios-brasileiros/main/csv/municipios.csv"
@@ -122,43 +123,40 @@ except Exception as e:
     print(f"[DASH] AVISO: coordenadas indisponíveis ({e}). Mapa será omitido.", flush=True)
     df_coords = pd.DataFrame(columns=['cod6', 'latitude', 'longitude'])
 
-# Agregar total de casos por município (todas as doenças, todo o período)
-print("[DASH] Montando mapa de calor...", flush=True)
-_df_mapa = df_mun.groupby(['codigo_municipio', 'nome_municipio', 'uf'], as_index=False)['casos_mes'].sum()
-_df_mapa = _df_mapa.rename(columns={'casos_mes': 'total_casos'})
-_df_mapa['cod6'] = _df_mapa['codigo_municipio'].astype(str).str.strip()
-_df_mapa = _df_mapa.merge(df_coords, on='cod6', how='inner')
-_df_mapa = _df_mapa[_df_mapa['total_casos'] > 0].copy()
+# Agregar total por município+doença (para hover) e total geral (para tamanho)
+print("[DASH] Preparando dados do mapa...", flush=True)
+_df_mapa_base = df_mun.groupby(['codigo_municipio', 'nome_municipio', 'uf', 'doenca'], as_index=False)['casos_mes'].sum()
+_df_total_mun = _df_mapa_base.groupby(['codigo_municipio', 'nome_municipio', 'uf'], as_index=False)['casos_mes'].sum()
+_df_total_mun = _df_total_mun.rename(columns={'casos_mes': 'total_casos'})
+_df_total_mun['cod6'] = _df_total_mun['codigo_municipio'].astype(str).str.strip()
+_df_total_mun = _df_total_mun.merge(df_coords, on='cod6', how='inner')
+_df_total_mun = _df_total_mun[_df_total_mun['total_casos'] > 0].copy()
 
-if not _df_mapa.empty:
-    fig_mapa = px.density_mapbox(
-        _df_mapa,
-        lat="latitude",
-        lon="longitude",
-        z="total_casos",
-        radius=12,
-        zoom=3.3,
-        center={"lat": -14.2, "lon": -51.9},
-        mapbox_style="carto-positron",
-        color_continuous_scale="YlOrRd",
-        hover_name="nome_municipio",
-        hover_data={"latitude": False, "longitude": False, "uf": True, "total_casos": ":,.0f", "cod6": False},
-        labels={"total_casos": "Total de Casos", "uf": "UF"},
-    )
-    fig_mapa.update_layout(
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=580,
-        coloraxis_colorbar=dict(title="Casos", thickness=15, len=0.6),
-    )
-    MAPA_DISPONIVEL = True
-else:
-    fig_mapa = go.Figure()
-    fig_mapa.update_layout(height=200, annotations=[{"text": "Mapa indisponível", "showarrow": False,
-                           "font": {"size": 14, "color": "#9ca3af"}}])
-    MAPA_DISPONIVEL = False
+# Pivotar doenças para hover
+_df_pivot = _df_mapa_base.pivot_table(
+    index=['codigo_municipio'], columns='doenca', values='casos_mes', fill_value=0
+).reset_index()
+_df_pivot.columns.name = None
+_df_total_mun = _df_total_mun.merge(_df_pivot, on='codigo_municipio', how='left')
 
-del _df_mapa
-print(f"[DASH] Mapa {'pronto' if MAPA_DISPONIVEL else 'indisponível'}.", flush=True)
+# Montar hover com todas as doenças
+def _build_hover(row):
+    linhas = [f"<b>{row['nome_municipio']}</b> ({row['uf']})"]
+    linhas.append(f"Total: <b>{int(row['total_casos']):,.0f}</b>".replace(",", "."))
+    for d in doencas:
+        val = int(row.get(d, 0))
+        if val > 0:
+            linhas.append(f"  {nomes_exibicao[d]}: {val:,.0f}".replace(",", "."))
+    return "<br>".join(linhas)
+
+_df_total_mun['hover'] = _df_total_mun.apply(_build_hover, axis=1)
+
+# Guardar DataFrame para uso no callback de filtro
+df_mapa_pontos = _df_total_mun[['cod6', 'nome_municipio', 'uf', 'latitude', 'longitude', 'total_casos', 'hover']].copy()
+df_mapa_pontos['nome_busca'] = df_mapa_pontos['nome_municipio'].str.lower()
+
+del _df_mapa_base, _df_total_mun, _df_pivot
+print(f"[DASH] Dados do mapa prontos — {len(df_mapa_pontos)} municípios com casos.", flush=True)
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app    = dash.Dash(__name__, title="Doenças e Agravos — SINAN", suppress_callback_exceptions=True,
@@ -208,13 +206,24 @@ app.layout = html.Div(
                 dcc.Graph(figure=fig_barras, config={"displayModeBar": False}),
             ]),
 
-            # ── Mapa de Calor por Município ───────────────────────────────────
+            # ── Mapa de Casos por Município ───────────────────────────────────
             html.Div(style={"marginTop": 24}, children=[
                 _card([
-                    _titulo("Mapa de Calor — Concentração de Casos Notificados (2007–2025)"),
+                    _titulo("Mapa de Casos por Município (2007–2025)"),
+
+                    html.Div([
+                        html.Label("Buscar município", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
+                        dcc.Input(
+                            id="mapa-busca",
+                            type="text",
+                            placeholder="Digite o nome do município...",
+                            debounce=True,
+                            style={"width": "300px", "fontSize": 13, "padding": "6px 12px",
+                                   "border": "1px solid #e2e8f0", "borderRadius": 6},
+                        ),
+                    ], style={"marginTop": 12, "marginBottom": 12}),
 
                     dcc.Graph(id="mapa-municipios",
-                              figure=fig_mapa,
                               config={"displayModeBar": "hover", "scrollZoom": True,
                                       "displaylogo": False,
                                       "modeBarButtonsToRemove": ["toImage", "lasso2d", "select2d"]}),
@@ -296,6 +305,69 @@ app.layout = html.Div(
         ]),
     ]
 )
+
+
+# ── Callback: Mapa de pontos por município ────────────────────────────────────
+@app.callback(
+    Output("mapa-municipios", "figure"),
+    Input("mapa-busca", "value"),
+)
+def atualizar_mapa(busca):
+    df = df_mapa_pontos.copy()
+
+    # Filtrar por nome se preenchido
+    if busca and busca.strip():
+        termo = busca.strip().lower()
+        df = df[df['nome_busca'].str.contains(termo, na=False)]
+
+    if df.empty:
+        fig_vazio = go.Figure()
+        fig_vazio.update_layout(
+            mapbox=dict(style="carto-positron", center={"lat": -14.2, "lon": -51.9}, zoom=3.3),
+            margin=dict(l=0, r=0, t=0, b=0), height=580,
+            annotations=[{"text": "Nenhum município encontrado", "showarrow": False,
+                          "font": {"size": 14, "color": "#9ca3af"}, "xref": "paper", "yref": "paper",
+                          "x": 0.5, "y": 0.5}],
+        )
+        return fig_vazio
+
+    # Tamanho proporcional ao log dos casos (evita pontos gigantes)
+    df['size'] = np.clip(np.log10(df['total_casos'] + 1) * 3, 4, 20)
+
+    fig = go.Figure(go.Scattermapbox(
+        lat=df['latitude'],
+        lon=df['longitude'],
+        mode='markers',
+        marker=dict(
+            size=df['size'],
+            color=df['total_casos'],
+            colorscale='YlOrRd',
+            showscale=True,
+            colorbar=dict(title="Casos", thickness=12, len=0.6),
+            opacity=0.7,
+            cmin=0,
+            cmax=df['total_casos'].quantile(0.95),
+        ),
+        text=df['hover'],
+        hovertemplate="%{text}<extra></extra>",
+    ))
+
+    # Centralizar no resultado quando busca ativa
+    if busca and busca.strip() and len(df) <= 50:
+        center = {"lat": df['latitude'].mean(), "lon": df['longitude'].mean()}
+        zoom = 6 if len(df) <= 5 else 4.5
+    else:
+        center = {"lat": -14.2, "lon": -51.9}
+        zoom = 3.3
+
+    fig.update_layout(
+        mapbox=dict(style="carto-positron", center=center, zoom=zoom),
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=580,
+        hoverlabel=dict(bgcolor="#ffffff", bordercolor="#e2e8f0",
+                        font=dict(family="Inter, sans-serif", size=12, color="#2d3748")),
+    )
+    return fig
 
 
 # ── Callback: UF cascateia com região ────────────────────────────────────────
