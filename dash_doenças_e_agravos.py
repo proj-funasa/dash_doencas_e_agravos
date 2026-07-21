@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import dash
-from dash import dcc, html, Input, Output, Patch
+from dash import dcc, html, Input, Output
 import pandas as pd
 import plotly.graph_objects as go
 import trino
@@ -191,31 +191,66 @@ fig_barras.update_layout(
     height=420,
 )
 
-# ── Figura inicial do Mapa ────────────────────────────────────────────────────
-fig_mapa_inicial = go.Figure()
-fig_mapa_inicial.add_trace(go.Choroplethmap(
+# ── Figura do Mapa (estática, sem filtros) ────────────────────────────────────
+print("[DASH] Montando mapa...", flush=True)
+# Agregar todas as doenças por município (total geral)
+_df_mapa = df_mun.copy()
+_df_mapa['cod6'] = _df_mapa['codigo_municipio'].astype(str).str.strip()
+_df_agg = _df_mapa.groupby(['cod6', 'nome_municipio', 'uf', 'doenca'], as_index=False)['casos_mes'].sum()
+_df_pivot = _df_agg.pivot_table(
+    index=['cod6', 'nome_municipio', 'uf'],
+    columns='doenca', values='casos_mes', fill_value=0
+).reset_index()
+_df_pivot.columns.name = None
+for d in doencas:
+    if d not in _df_pivot.columns:
+        _df_pivot[d] = 0
+_colunas_doencas = [d for d in doencas if d in _df_pivot.columns]
+_df_pivot['total_geral'] = _df_pivot[_colunas_doencas].sum(axis=1)
+_df_com_dados = _df_pivot[_df_pivot['total_geral'] > 0].copy()
+_df_com_dados['cod7'] = _df_com_dados['cod6'].map(cod6_to_cod7)
+_df_com_dados = _df_com_dados.dropna(subset=['cod7'])
+_ids_com_dados = set(_df_com_dados['cod7'].tolist())
+
+_z_values = [1 if loc in _ids_com_dados else 0 for loc in geojson_ids]
+
+_hover_dict = {}
+for _, row in _df_com_dados.iterrows():
+    linhas = [f"<b>{row['nome_municipio']}</b> ({row['uf']})"]
+    for d in doencas:
+        val = int(row.get(d, 0))
+        if val > 0:
+            linhas.append(f"{nomes_exibicao[d]}: <b>{val:,.0f}</b>".replace(",", "."))
+    _hover_dict[row['cod7']] = "<br>".join(linhas)
+
+_customdata = [_hover_dict.get(loc, "") for loc in geojson_ids]
+
+fig_mapa = go.Figure()
+fig_mapa.add_trace(go.Choroplethmap(
     geojson=geojson_municipios,
     locations=geojson_ids,
-    z=[0] * len(geojson_ids),
+    z=_z_values,
     featureidkey="properties.codarea",
     zmin=0, zmax=1,
     colorscale=[[0, "#F8FAFB"], [0.4999, "#F8FAFB"], [0.5, "#DCECF5"], [1, "#DCECF5"]],
     marker_opacity=0.95,
     marker_line_color="#C5D1D9",
     marker_line_width=0.35,
-    customdata=[""] * len(geojson_ids),
+    customdata=_customdata,
     hovertemplate="%{customdata}<extra></extra>",
     showscale=False,
 ))
-fig_mapa_inicial.update_layout(
+fig_mapa.update_layout(
     map=dict(style=FUNASA_MAP_STYLE, center={"lat": -14.2, "lon": -51.9}, zoom=3.3),
     margin=dict(l=0, r=0, t=0, b=0), height=580,
     paper_bgcolor="#E8F0F3", plot_bgcolor="#E8F0F3",
     dragmode="pan", hovermode="closest",
     hoverlabel=dict(bgcolor="#ffffff", bordercolor="#e2e8f0",
                     font=dict(family="Inter, sans-serif", size=12, color="#2d3748")),
-    uirevision="mapa-doencas",
 )
+# Limpar variáveis temporárias
+del _df_mapa, _df_agg, _df_pivot, _df_com_dados, _ids_com_dados, _z_values, _hover_dict, _customdata
+print("[DASH] Mapa pronto.", flush=True)
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app    = dash.Dash(__name__, title="Doenças e Agravos — SINAN", suppress_callback_exceptions=True,
@@ -268,49 +303,13 @@ app.layout = html.Div(
             # ── Mapa Coroplético por Município ────────────────────────────────
             html.Div(style={"marginTop": 24}, children=[
                 _card([
-                    _titulo("Mapa de Casos por Município"),
+                    _titulo("Mapa de Casos por Município — Todas as Doenças (2007–2025)"),
 
-                    # Filtros do mapa
-                    html.Div([
-                        html.Div([
-                            html.Label("Doença", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
-                            dcc.Dropdown(
-                                id="mapa-filtro-doenca",
-                                options=[{"label": nomes_exibicao[d], "value": d} for d in doencas],
-                                value="dengue", clearable=False,
-                                style={"width": "180px", "fontSize": 13},
-                            ),
-                        ]),
-                        html.Div([
-                            html.Label("Ano", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
-                            dcc.Dropdown(
-                                id="mapa-filtro-ano",
-                                options=[{"label": "Todos", "value": "Todos"}] +
-                                        [{"label": a, "value": a} for a in anos],
-                                value="Todos", clearable=False,
-                                style={"width": "120px", "fontSize": 13},
-                            ),
-                        ]),
-                        html.Div([
-                            html.Label("Mês", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
-                            dcc.Dropdown(
-                                id="mapa-filtro-mes",
-                                options=[{"label": "Todos", "value": "Todos"}] +
-                                        [{"label": NOME_MES[m], "value": m} for m in meses],
-                                value="Todos", clearable=False,
-                                style={"width": "140px", "fontSize": 13},
-                            ),
-                        ]),
-                    ], style={"display": "flex", "gap": 16, "marginTop": 16, "marginBottom": 16, "flexWrap": "wrap"}),
-
-                    dcc.Loading(
-                        dcc.Graph(id="mapa-municipios",
-                                  figure=fig_mapa_inicial,
-                                  config={"displayModeBar": "hover", "scrollZoom": True,
-                                          "displaylogo": False,
-                                          "modeBarButtonsToRemove": ["toImage", "lasso2d", "select2d"]}),
-                        type="circle",
-                    ),
+                    dcc.Graph(id="mapa-municipios",
+                              figure=fig_mapa,
+                              config={"displayModeBar": "hover", "scrollZoom": True,
+                                      "displaylogo": False,
+                                      "modeBarButtonsToRemove": ["toImage", "lasso2d", "select2d"]}),
                 ]),
             ]),
 
@@ -403,67 +402,6 @@ def atualizar_opcoes_uf(regiao_sel):
     else:
         lista = sorted(UF_POR_REGIAO.get(regiao_sel, []))
     return [{"label": "Todas", "value": "Todos"}] + [{"label": u, "value": u} for u in lista], "Todos"
-
-
-# ── Callback: Mapa de casos por município ─────────────────────────────────────
-@app.callback(
-    Output("mapa-municipios", "figure"),
-    Input("mapa-filtro-doenca", "value"),
-    Input("mapa-filtro-ano", "value"),
-    Input("mapa-filtro-mes", "value"),
-)
-def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
-    # Filtrar por período
-    df_filtrado = df_mun.copy()
-    if ano_sel != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['ano'] == ano_sel]
-    if mes_sel != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['mes'] == mes_sel]
-
-    # Agregar TODAS as doenças por município
-    df_filtrado['cod6'] = df_filtrado['codigo_municipio'].astype(str).str.strip()
-    df_agg = df_filtrado.groupby(['cod6', 'nome_municipio', 'uf', 'doenca'], as_index=False)['casos_mes'].sum()
-
-    # Pivotar para ter uma coluna por doença
-    df_pivot = df_agg.pivot_table(
-        index=['cod6', 'nome_municipio', 'uf'],
-        columns='doenca', values='casos_mes', fill_value=0
-    ).reset_index()
-    df_pivot.columns.name = None
-
-    for d in doencas:
-        if d not in df_pivot.columns:
-            df_pivot[d] = 0
-
-    # Doença selecionada define quais municípios ficam destacados
-    df_pivot['casos_sel'] = df_pivot[doenca_sel]
-    df_com_dados = df_pivot[df_pivot['casos_sel'] > 0].copy()
-
-    # Mapear cod6 -> cod7 para compatibilizar com GeoJSON do IBGE
-    df_com_dados['cod7'] = df_com_dados['cod6'].map(cod6_to_cod7)
-    df_com_dados = df_com_dados.dropna(subset=['cod7'])
-    ids_com_dados = set(df_com_dados['cod7'].tolist())
-
-    # Montar z e customdata
-    z_values = [1 if loc in ids_com_dados else 0 for loc in geojson_ids]
-
-    hover_dict = {}
-    for _, row in df_com_dados.iterrows():
-        linhas = [f"<b>{row['nome_municipio']}</b> ({row['uf']})"]
-        for d in doencas:
-            val = int(row.get(d, 0))
-            if val > 0:
-                marcador = " ◀" if d == doenca_sel else ""
-                linhas.append(f"{nomes_exibicao[d]}: <b>{val:,.0f}</b>{marcador}".replace(",", "."))
-        hover_dict[row['cod7']] = "<br>".join(linhas)
-
-    customdata = [hover_dict.get(loc, "") for loc in geojson_ids]
-
-    # Usar Patch para atualizar apenas z e customdata (sem reenviar GeoJSON)
-    patched = Patch()
-    patched["data"][0]["z"] = z_values
-    patched["data"][0]["customdata"] = customdata
-    return patched
 
 
 # ── Callback: Gráfico + Tabela — filtra em memória ───────────────────────────
