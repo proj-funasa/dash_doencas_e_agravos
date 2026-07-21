@@ -104,18 +104,27 @@ df_mun['regiao']           = df_mun['uf'].map(REGIAO_POR_UF)
 print(f"[DASH] Pronto — {len(df_mun)} registros carregados. Subindo servidor...", flush=True)
 
 # ── GeoJSON dos municípios (simplificado — resolução mínima) ──────────────────
-print("[DASH] Carregando GeoJSON de municípios (simplificado)...", flush=True)
-GEOJSON_MUN_URL = "https://raw.githubusercontent.com/tbrugz/geodata-br/master/geojson/geojs-35-mun.json"
+print("[DASH] Carregando coordenadas dos municípios...", flush=True)
+COORDS_URL = "https://raw.githubusercontent.com/kelvins/municipios-brasileiros/main/csv/municipios.csv"
 try:
-    geojson_municipios = requests.get(GEOJSON_MUN_URL, timeout=90).json()
-    # Padronizar código do município para 6 dígitos (sem dígito verificador)
-    for feat in geojson_municipios["features"]:
-        cod = str(feat["properties"].get("id", "")).strip()
-        feat["properties"]["id"] = cod[:6] if len(cod) >= 6 else cod
-    print(f"[DASH] GeoJSON municípios carregado — {len(geojson_municipios['features'])} feições", flush=True)
+    df_coords = pd.read_csv(COORDS_URL, dtype={'codigo_ibge': str})
+    df_coords['cod6'] = df_coords['codigo_ibge'].str[:6]
+    df_coords = df_coords[['cod6', 'latitude', 'longitude']].drop_duplicates(subset='cod6')
+    coords_dict = df_coords.set_index('cod6')[['latitude', 'longitude']].to_dict('index')
+    print(f"[DASH] Coordenadas carregadas — {len(coords_dict)} municípios", flush=True)
 except Exception as e:
-    print(f"[DASH] ERRO ao carregar GeoJSON municípios: {e}. Mapa ficará indisponível.", flush=True)
-    geojson_municipios = {"type": "FeatureCollection", "features": []}
+    print(f"[DASH] ERRO ao carregar coordenadas: {e}. Mapa ficará indisponível.", flush=True)
+    coords_dict = {}
+
+# GeoJSON de estados (contorno leve para o mapa)
+print("[DASH] Carregando GeoJSON de estados...", flush=True)
+GEOJSON_UF_URL = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson"
+try:
+    geojson_estados = requests.get(GEOJSON_UF_URL, timeout=30).json()
+    print(f"[DASH] GeoJSON estados carregado — {len(geojson_estados['features'])} UFs", flush=True)
+except Exception as e:
+    print(f"[DASH] ERRO ao carregar GeoJSON estados: {e}", flush=True)
+    geojson_estados = {"type": "FeatureCollection", "features": []}
 
 # ── Cores ─────────────────────────────────────────────────────────────────────
 COR_HEADER = "#1B3A5C"
@@ -354,7 +363,7 @@ def atualizar_opcoes_uf(regiao_sel):
     return [{"label": "Todas", "value": "Todos"}] + [{"label": u, "value": u} for u in lista], "Todos"
 
 
-# ── Callback: Mapa coroplético por município ─────────────────────────────────
+# ── Callback: Mapa de casos por município ─────────────────────────────────────
 @app.callback(
     Output("mapa-municipios", "figure"),
     Input("mapa-filtro-doenca", "value"),
@@ -386,17 +395,35 @@ def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
         )
         return fig_vazio
 
-    fig = px.choropleth_mapbox(
+    # Adicionar coordenadas
+    df_agg['latitude'] = df_agg['cod6'].map(lambda c: coords_dict.get(c, {}).get('latitude'))
+    df_agg['longitude'] = df_agg['cod6'].map(lambda c: coords_dict.get(c, {}).get('longitude'))
+    df_agg = df_agg.dropna(subset=['latitude', 'longitude'])
+
+    if df_agg.empty:
+        fig_vazio = go.Figure()
+        fig_vazio.update_layout(
+            plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+            xaxis={"visible": False}, yaxis={"visible": False},
+            annotations=[{"text": "Coordenadas não encontradas",
+                          "showarrow": False, "font": {"size": 14, "color": "#9ca3af"}}],
+            height=500,
+        )
+        return fig_vazio
+
+    fig = px.scatter_mapbox(
         df_agg,
-        geojson=geojson_municipios,
-        locations="cod6",
-        featureidkey="properties.id",
+        lat="latitude",
+        lon="longitude",
         color="total_casos",
+        size="total_casos",
+        size_max=18,
         color_continuous_scale="YlOrRd",
         hover_name="nome_municipio",
-        hover_data={"cod6": False, "uf": True, "total_casos": ":,.0f"},
+        hover_data={"latitude": False, "longitude": False, "cod6": False,
+                    "uf": True, "total_casos": ":,.0f"},
         labels={"total_casos": "Casos", "uf": "UF"},
-        mapbox_style="carto-positron",
+        mapbox_style="white-bg",
         center={"lat": -14.2, "lon": -51.9},
         zoom=3.3,
         opacity=0.75,
@@ -408,6 +435,24 @@ def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
             title="Casos",
             thickness=15,
             len=0.7,
+        ),
+        mapbox=dict(
+            layers=[
+                {
+                    "source": geojson_estados,
+                    "type": "fill",
+                    "color": "#e8edf2",
+                    "opacity": 0.4,
+                    "below": "traces",
+                },
+                {
+                    "source": geojson_estados,
+                    "type": "line",
+                    "color": "#c0c8d0",
+                    "opacity": 0.5,
+                    "below": "traces",
+                },
+            ],
         ),
     )
     return fig
