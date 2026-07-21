@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import dash
-from dash import dcc, html, Input, Output
+from dash import dcc, html, Input, Output, Patch
 import pandas as pd
 import plotly.graph_objects as go
 import trino
@@ -191,6 +191,32 @@ fig_barras.update_layout(
     height=420,
 )
 
+# ── Figura inicial do Mapa ────────────────────────────────────────────────────
+fig_mapa_inicial = go.Figure()
+fig_mapa_inicial.add_trace(go.Choroplethmap(
+    geojson=geojson_municipios,
+    locations=geojson_ids,
+    z=[0] * len(geojson_ids),
+    featureidkey="properties.codarea",
+    zmin=0, zmax=1,
+    colorscale=[[0, "#F8FAFB"], [0.4999, "#F8FAFB"], [0.5, "#DCECF5"], [1, "#DCECF5"]],
+    marker_opacity=0.95,
+    marker_line_color="#C5D1D9",
+    marker_line_width=0.35,
+    customdata=[""] * len(geojson_ids),
+    hovertemplate="%{customdata}<extra></extra>",
+    showscale=False,
+))
+fig_mapa_inicial.update_layout(
+    map=dict(style=FUNASA_MAP_STYLE, center={"lat": -14.2, "lon": -51.9}, zoom=3.3),
+    margin=dict(l=0, r=0, t=0, b=0), height=580,
+    paper_bgcolor="#E8F0F3", plot_bgcolor="#E8F0F3",
+    dragmode="pan", hovermode="closest",
+    hoverlabel=dict(bgcolor="#ffffff", bordercolor="#e2e8f0",
+                    font=dict(family="Inter, sans-serif", size=12, color="#2d3748")),
+    uirevision="mapa-doencas",
+)
+
 # ── App ───────────────────────────────────────────────────────────────────────
 app    = dash.Dash(__name__, title="Doenças e Agravos — SINAN", suppress_callback_exceptions=True,
                   url_base_pathname=os.environ.get("DASH_PREFIX", "/doencas-agravos/"),
@@ -279,6 +305,7 @@ app.layout = html.Div(
 
                     dcc.Loading(
                         dcc.Graph(id="mapa-municipios",
+                                  figure=fig_mapa_inicial,
                                   config={"displayModeBar": "hover", "scrollZoom": True,
                                           "displaylogo": False,
                                           "modeBarButtonsToRemove": ["toImage", "lasso2d", "select2d"]}),
@@ -393,7 +420,7 @@ def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
     if mes_sel != "Todos":
         df_filtrado = df_filtrado[df_filtrado['mes'] == mes_sel]
 
-    # Agregar TODAS as doenças por município (cod7 = código com 7 dígitos do IBGE)
+    # Agregar TODAS as doenças por município
     df_filtrado['cod6'] = df_filtrado['codigo_municipio'].astype(str).str.strip()
     df_agg = df_filtrado.groupby(['cod6', 'nome_municipio', 'uf', 'doenca'], as_index=False)['casos_mes'].sum()
 
@@ -408,19 +435,18 @@ def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
         if d not in df_pivot.columns:
             df_pivot[d] = 0
 
-    # Total da doença selecionada (define cor)
+    # Doença selecionada define quais municípios ficam destacados
     df_pivot['casos_sel'] = df_pivot[doenca_sel]
-
-    # Apenas municípios com dados na doença selecionada definem o destaque
     df_com_dados = df_pivot[df_pivot['casos_sel'] > 0].copy()
 
     # Mapear cod6 -> cod7 para compatibilizar com GeoJSON do IBGE
     df_com_dados['cod7'] = df_com_dados['cod6'].map(cod6_to_cod7)
     df_com_dados = df_com_dados.dropna(subset=['cod7'])
     ids_com_dados = set(df_com_dados['cod7'].tolist())
+
+    # Montar z e customdata
     z_values = [1 if loc in ids_com_dados else 0 for loc in geojson_ids]
 
-    # Montar hover com todas as doenças
     hover_dict = {}
     for _, row in df_com_dados.iterrows():
         linhas = [f"<b>{row['nome_municipio']}</b> ({row['uf']})"]
@@ -431,51 +457,13 @@ def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
                 linhas.append(f"{nomes_exibicao[d]}: <b>{val:,.0f}</b>{marcador}".replace(",", "."))
         hover_dict[row['cod7']] = "<br>".join(linhas)
 
-    customdata = [hover_dict.get(loc, f"Código IBGE: {loc}<br>Sem dados no período") for loc in geojson_ids]
+    customdata = [hover_dict.get(loc, "") for loc in geojson_ids]
 
-    fig = go.Figure()
-
-    # Choropleth base (todos os municípios)
-    fig.add_trace(go.Choroplethmap(
-        geojson=geojson_municipios,
-        locations=geojson_ids,
-        z=z_values,
-        featureidkey="properties.codarea",
-        zmin=0,
-        zmax=1,
-        colorscale=[
-            [0, "#F8FAFB"],
-            [0.4999, "#F8FAFB"],
-            [0.5, "#DCECF5"],
-            [1, "#DCECF5"],
-        ],
-        marker_opacity=0.95,
-        marker_line_color="#C5D1D9",
-        marker_line_width=0.35,
-        customdata=customdata,
-        hovertemplate="%{customdata}<extra></extra>",
-        showscale=False,
-    ))
-
-    fig.update_layout(
-        map=dict(
-            style=FUNASA_MAP_STYLE,
-            center={"lat": -14.2, "lon": -51.9},
-            zoom=3.3,
-        ),
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=580,
-        paper_bgcolor="#E8F0F3",
-        plot_bgcolor="#E8F0F3",
-        dragmode="pan",
-        hovermode="closest",
-        hoverlabel=dict(
-            bgcolor="#ffffff",
-            bordercolor="#e2e8f0",
-            font=dict(family="Inter, sans-serif", size=12, color="#2d3748"),
-        ),
-    )
-    return fig
+    # Usar Patch para atualizar apenas z e customdata (sem reenviar GeoJSON)
+    patched = Patch()
+    patched["data"][0]["z"] = z_values
+    patched["data"][0]["customdata"] = customdata
+    return patched
 
 
 # ── Callback: Gráfico + Tabela — filtra em memória ───────────────────────────
