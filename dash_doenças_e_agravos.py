@@ -198,6 +198,57 @@ fig_mapa.update_layout(
 del _pivot, _ids_com_dados, _z_values, _hover_dict, _customdata, df_mapa_raw
 print("[DASH] Mapa pronto.", flush=True)
 
+# ── Cores ─────────────────────────────────────────────────────────────────────
+COR_HEADER = "#1B3A5C"
+COR_FUNDO  = "#F0F2F5"
+CORES_DOENCAS = [
+    "#2B6CB0", "#2F855A", "#D85A30", "#7F77DD", "#1D9E75",
+    "#EF9F27", "#378ADD", "#C53030", "#5A6B7A", "#9F7AEA", "#DD6B20"
+]
+COR_POR_DOENCA = {d: CORES_DOENCAS[i] for i, d in enumerate(doencas)}
+
+
+# ── Helpers de layout ─────────────────────────────────────────────────────────
+def _kpi(nome, valor, cor):
+    return html.Div([
+        html.P(f"{valor:,.0f}".replace(",", "."),
+               style={"fontSize": 26, "fontWeight": 700, "color": "#fff", "margin": "0 0 4px 0"}),
+        html.P(nome, style={"fontSize": 11, "fontWeight": 600, "color": "#fff", "margin": 0,
+                            "textTransform": "uppercase", "letterSpacing": "0.05em"}),
+    ], style={"backgroundColor": cor, "borderRadius": 8,
+              "padding": "18px 22px", "flex": 1, "minWidth": "200px"})
+
+
+def _card(children):
+    return html.Div(children, style={
+        "backgroundColor": "#ffffff", "borderRadius": 8,
+        "padding": "20px 24px", "border": "1px solid #e2e8f0", "flex": 1
+    })
+
+
+def _titulo(texto):
+    return html.P(texto, style={"fontSize": 13, "fontWeight": 600, "color": "#2d3748", "margin": 0})
+
+
+# ── Gráfico de barras (KPIs) ──────────────────────────────────────────────────
+df_sorted  = df_total.sort_values("total_casos", ascending=True)
+fig_barras = go.Figure(go.Bar(
+    x=df_sorted["total_casos"],
+    y=[nomes_exibicao[d] for d in df_sorted["doenca"]],
+    orientation="h",
+    marker_color=[COR_POR_DOENCA[d] for d in df_sorted["doenca"]],
+    hovertemplate="<b>%{y}</b><br>Casos: %{x:,.0f}<extra></extra>",
+))
+fig_barras.update_layout(
+    margin=dict(l=10, r=20, t=10, b=40),
+    plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+    font=dict(family="Inter, sans-serif", size=12, color="#333"),
+    xaxis=dict(showgrid=True, gridcolor="#f0f0f0", linecolor="#e0e0e0", title="Total de Casos"),
+    yaxis=dict(showgrid=False, linecolor="#e0e0e0"),
+    hoverlabel=dict(bgcolor="#fff", bordercolor="#ccc", font_size=12),
+    height=420,
+)
+
 # ── App ───────────────────────────────────────────────────────────────────────
 app    = dash.Dash(__name__, title="Doenças e Agravos — SINAN", suppress_callback_exceptions=True,
                   url_base_pathname=os.environ.get("DASH_PREFIX", "/doencas-agravos/"),
