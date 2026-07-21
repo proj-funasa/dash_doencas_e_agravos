@@ -1,5 +1,4 @@
 import os
-import json
 import requests
 import dash
 from dash import dcc, html, Input, Output
@@ -102,155 +101,56 @@ df_mun['regiao']           = df_mun['uf'].map(REGIAO_POR_UF)
 
 print(f"[DASH] Pronto — {len(df_mun)} registros carregados. Subindo servidor...", flush=True)
 
-# ── GeoJSON dos municípios (IBGE, qualidade mínima) ───────────────────────────
-print("[DASH] Carregando GeoJSON de municípios (IBGE)...", flush=True)
-CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
-IBGE_GEOJSON_CACHE = os.path.join(CACHE_DIR, "ibge_municipios_minima.geojson")
-IBGE_GEOJSON_URL = "https://servicodados.ibge.gov.br/api/v4/malhas/paises/BR"
+# ── Coordenadas dos municípios e Mapa de Calor ────────────────────────────────
+import plotly.express as px
+
+print("[DASH] Carregando coordenadas dos municípios...", flush=True)
+COORDS_URL = "https://raw.githubusercontent.com/kelvins/municipios-brasileiros/main/csv/municipios.csv"
+COORDS_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache", "municipios_coords.csv")
 
 try:
-    if os.path.exists(IBGE_GEOJSON_CACHE):
-        with open(IBGE_GEOJSON_CACHE, encoding="utf-8") as f:
-            geojson_municipios = json.load(f)
+    os.makedirs(os.path.dirname(COORDS_CACHE), exist_ok=True)
+    if os.path.exists(COORDS_CACHE):
+        df_coords = pd.read_csv(COORDS_CACHE, dtype={'codigo_ibge': str})
     else:
-        resp = requests.get(
-            IBGE_GEOJSON_URL,
-            params={"intrarregiao": "municipio", "formato": "application/vnd.geo+json", "qualidade": "minima"},
-            timeout=120,
-        )
-        resp.raise_for_status()
-        geojson_municipios = resp.json()
-        os.makedirs(CACHE_DIR, exist_ok=True)
-        with open(IBGE_GEOJSON_CACHE, "w", encoding="utf-8") as f:
-            json.dump(geojson_municipios, f)
-    # Extrair lista de IDs para o mapa
-    geojson_ids = [str(feat["properties"].get("codarea", "")) for feat in geojson_municipios.get("features", [])]
-    # Mapa de cod6 (sem dígito verificador) -> cod7 (com dígito verificador)
-    cod6_to_cod7 = {cod7[:6]: cod7 for cod7 in geojson_ids if len(cod7) >= 6}
-    print(f"[DASH] GeoJSON carregado — {len(geojson_ids)} municípios", flush=True)
+        df_coords = pd.read_csv(COORDS_URL, dtype={'codigo_ibge': str})
+        df_coords.to_csv(COORDS_CACHE, index=False)
+    df_coords['cod6'] = df_coords['codigo_ibge'].str[:6]
+    df_coords = df_coords[['cod6', 'latitude', 'longitude']].drop_duplicates(subset='cod6')
+    print(f"[DASH] Coordenadas carregadas — {len(df_coords)} municípios", flush=True)
 except Exception as e:
-    print(f"[DASH] ERRO ao carregar GeoJSON: {e}. Mapa ficará indisponível.", flush=True)
-    geojson_municipios = {"type": "FeatureCollection", "features": []}
-    geojson_ids = []
+    print(f"[DASH] ERRO ao carregar coordenadas: {e}", flush=True)
+    df_coords = pd.DataFrame(columns=['cod6', 'latitude', 'longitude'])
 
-# Estilo do mapa (igual ao Painel Municípios)
-FUNASA_MAP_STYLE = {
-    "version": 8,
-    "sources": {},
-    "layers": [{"id": "background", "type": "background", "paint": {"background-color": "#E8F0F3"}}],
-}
-
-# ── Cores ─────────────────────────────────────────────────────────────────────
-COR_HEADER = "#1B3A5C"
-COR_FUNDO  = "#F0F2F5"
-CORES_DOENCAS = [
-    "#2B6CB0", "#2F855A", "#D85A30", "#7F77DD", "#1D9E75",
-    "#EF9F27", "#378ADD", "#C53030", "#5A6B7A", "#9F7AEA", "#DD6B20"
-]
-COR_POR_DOENCA = {d: CORES_DOENCAS[i] for i, d in enumerate(doencas)}
-
-
-# ── Helpers de layout ─────────────────────────────────────────────────────────
-def _kpi(nome, valor, cor):
-    return html.Div([
-        html.P(f"{valor:,.0f}".replace(",", "."),
-               style={"fontSize": 26, "fontWeight": 700, "color": "#fff", "margin": "0 0 4px 0"}),
-        html.P(nome, style={"fontSize": 11, "fontWeight": 600, "color": "#fff", "margin": 0,
-                            "textTransform": "uppercase", "letterSpacing": "0.05em"}),
-    ], style={"backgroundColor": cor, "borderRadius": 8,
-              "padding": "18px 22px", "flex": 1, "minWidth": "200px"})
-
-
-def _card(children):
-    return html.Div(children, style={
-        "backgroundColor": "#ffffff", "borderRadius": 8,
-        "padding": "20px 24px", "border": "1px solid #e2e8f0", "flex": 1
-    })
-
-
-def _titulo(texto):
-    return html.P(texto, style={"fontSize": 13, "fontWeight": 600, "color": "#2d3748", "margin": 0})
-
-
-# ── Gráfico de barras (KPIs) ──────────────────────────────────────────────────
-df_sorted  = df_total.sort_values("total_casos", ascending=True)
-fig_barras = go.Figure(go.Bar(
-    x=df_sorted["total_casos"],
-    y=[nomes_exibicao[d] for d in df_sorted["doenca"]],
-    orientation="h",
-    marker_color=[COR_POR_DOENCA[d] for d in df_sorted["doenca"]],
-    hovertemplate="<b>%{y}</b><br>Casos: %{x:,.0f}<extra></extra>",
-))
-fig_barras.update_layout(
-    margin=dict(l=10, r=20, t=10, b=40),
-    plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
-    font=dict(family="Inter, sans-serif", size=12, color="#333"),
-    xaxis=dict(showgrid=True, gridcolor="#f0f0f0", linecolor="#e0e0e0", title="Total de Casos"),
-    yaxis=dict(showgrid=False, linecolor="#e0e0e0"),
-    hoverlabel=dict(bgcolor="#fff", bordercolor="#ccc", font_size=12),
-    height=420,
-)
-
-# ── Figura do Mapa (estática, sem filtros) ────────────────────────────────────
-print("[DASH] Montando mapa...", flush=True)
-# Agregar todas as doenças por município (total geral)
-_df_mapa = df_mun.copy()
+# Agregar total de casos por município (todas as doenças, todo o período)
+print("[DASH] Montando mapa de calor...", flush=True)
+_df_mapa = df_mun.groupby(['codigo_municipio', 'nome_municipio', 'uf'], as_index=False)['casos_mes'].sum()
+_df_mapa = _df_mapa.rename(columns={'casos_mes': 'total_casos'})
 _df_mapa['cod6'] = _df_mapa['codigo_municipio'].astype(str).str.strip()
-_df_agg = _df_mapa.groupby(['cod6', 'nome_municipio', 'uf', 'doenca'], as_index=False)['casos_mes'].sum()
-_df_pivot = _df_agg.pivot_table(
-    index=['cod6', 'nome_municipio', 'uf'],
-    columns='doenca', values='casos_mes', fill_value=0
-).reset_index()
-_df_pivot.columns.name = None
-for d in doencas:
-    if d not in _df_pivot.columns:
-        _df_pivot[d] = 0
-_colunas_doencas = [d for d in doencas if d in _df_pivot.columns]
-_df_pivot['total_geral'] = _df_pivot[_colunas_doencas].sum(axis=1)
-_df_com_dados = _df_pivot[_df_pivot['total_geral'] > 0].copy()
-_df_com_dados['cod7'] = _df_com_dados['cod6'].map(cod6_to_cod7)
-_df_com_dados = _df_com_dados.dropna(subset=['cod7'])
-_ids_com_dados = set(_df_com_dados['cod7'].tolist())
+_df_mapa = _df_mapa.merge(df_coords, on='cod6', how='inner')
+_df_mapa = _df_mapa[_df_mapa['total_casos'] > 0].copy()
 
-_z_values = [1 if loc in _ids_com_dados else 0 for loc in geojson_ids]
-
-_hover_dict = {}
-for _, row in _df_com_dados.iterrows():
-    linhas = [f"<b>{row['nome_municipio']}</b> ({row['uf']})"]
-    for d in doencas:
-        val = int(row.get(d, 0))
-        if val > 0:
-            linhas.append(f"{nomes_exibicao[d]}: <b>{val:,.0f}</b>".replace(",", "."))
-    _hover_dict[row['cod7']] = "<br>".join(linhas)
-
-_customdata = [_hover_dict.get(loc, "") for loc in geojson_ids]
-
-fig_mapa = go.Figure()
-fig_mapa.add_trace(go.Choroplethmap(
-    geojson=geojson_municipios,
-    locations=geojson_ids,
-    z=_z_values,
-    featureidkey="properties.codarea",
-    zmin=0, zmax=1,
-    colorscale=[[0, "#F8FAFB"], [0.4999, "#F8FAFB"], [0.5, "#DCECF5"], [1, "#DCECF5"]],
-    marker_opacity=0.95,
-    marker_line_color="#C5D1D9",
-    marker_line_width=0.35,
-    customdata=_customdata,
-    hovertemplate="%{customdata}<extra></extra>",
-    showscale=False,
-))
-fig_mapa.update_layout(
-    map=dict(style=FUNASA_MAP_STYLE, center={"lat": -14.2, "lon": -51.9}, zoom=3.3),
-    margin=dict(l=0, r=0, t=0, b=0), height=580,
-    paper_bgcolor="#E8F0F3", plot_bgcolor="#E8F0F3",
-    dragmode="pan", hovermode="closest",
-    hoverlabel=dict(bgcolor="#ffffff", bordercolor="#e2e8f0",
-                    font=dict(family="Inter, sans-serif", size=12, color="#2d3748")),
+fig_mapa = px.density_mapbox(
+    _df_mapa,
+    lat="latitude",
+    lon="longitude",
+    z="total_casos",
+    radius=12,
+    zoom=3.3,
+    center={"lat": -14.2, "lon": -51.9},
+    mapbox_style="carto-positron",
+    color_continuous_scale="YlOrRd",
+    hover_name="nome_municipio",
+    hover_data={"latitude": False, "longitude": False, "uf": True, "total_casos": ":,.0f", "cod6": False},
+    labels={"total_casos": "Total de Casos", "uf": "UF"},
 )
-# Limpar variáveis temporárias
-del _df_mapa, _df_agg, _df_pivot, _df_com_dados, _ids_com_dados, _z_values, _hover_dict, _customdata
-print("[DASH] Mapa pronto.", flush=True)
+fig_mapa.update_layout(
+    margin=dict(l=0, r=0, t=0, b=0),
+    height=580,
+    coloraxis_colorbar=dict(title="Casos", thickness=15, len=0.6),
+)
+del _df_mapa
+print("[DASH] Mapa de calor pronto.", flush=True)
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app    = dash.Dash(__name__, title="Doenças e Agravos — SINAN", suppress_callback_exceptions=True,
@@ -300,10 +200,10 @@ app.layout = html.Div(
                 dcc.Graph(figure=fig_barras, config={"displayModeBar": False}),
             ]),
 
-            # ── Mapa Coroplético por Município ────────────────────────────────
+            # ── Mapa de Calor por Município ───────────────────────────────────
             html.Div(style={"marginTop": 24}, children=[
                 _card([
-                    _titulo("Mapa de Casos por Município — Todas as Doenças (2007–2025)"),
+                    _titulo("Mapa de Calor — Concentração de Casos Notificados (2007–2025)"),
 
                     dcc.Graph(id="mapa-municipios",
                               figure=fig_mapa,
