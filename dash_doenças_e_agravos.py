@@ -255,7 +255,9 @@ app.layout = html.Div(
                     ], style={"display": "flex", "gap": 16, "marginTop": 16, "marginBottom": 16, "flexWrap": "wrap"}),
 
                     dcc.Loading(
-                        dcc.Graph(id="mapa-municipios", config={"displayModeBar": False}),
+                        dcc.Graph(id="mapa-municipios",
+                                  config={"displayModeBar": True, "scrollZoom": True,
+                                          "modeBarButtonsToRemove": ["toImage", "lasso2d", "select2d"]}),
                         type="circle",
                     ),
                 ]),
@@ -384,9 +386,17 @@ def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
         )
         return fig_vazio
 
+    # Filtra GeoJSON apenas para municípios com dados (performance)
+    codigos_com_dados = set(df_agg['cod6'].tolist())
+    geojson_filtrado = {
+        "type": "FeatureCollection",
+        "features": [f for f in geojson_municipios["features"]
+                     if f["properties"]["id"] in codigos_com_dados]
+    }
+
     fig = px.choropleth_mapbox(
         df_agg,
-        geojson=geojson_municipios,
+        geojson=geojson_filtrado,
         locations="cod6",
         featureidkey="properties.id",
         color="total_casos",
@@ -394,10 +404,10 @@ def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
         hover_name="nome_municipio",
         hover_data={"cod6": False, "uf": True, "total_casos": ":,.0f"},
         labels={"total_casos": "Casos", "uf": "UF"},
-        mapbox_style="carto-positron",
+        mapbox_style="white-bg",
         center={"lat": -14.2, "lon": -51.9},
-        zoom=3.5,
-        opacity=0.7,
+        zoom=3.3,
+        opacity=0.8,
     )
     fig.update_layout(
         margin=dict(l=0, r=0, t=0, b=0),
@@ -406,6 +416,15 @@ def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
             title="Casos",
             thickness=15,
             len=0.7,
+        ),
+        mapbox=dict(
+            layers=[{
+                "source": geojson_municipios,
+                "type": "line",
+                "color": "#cbd5e0",
+                "opacity": 0.3,
+                "below": "traces",
+            }],
         ),
     )
     return fig
