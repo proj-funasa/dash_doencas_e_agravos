@@ -103,19 +103,32 @@ df_mun['regiao']           = df_mun['uf'].map(REGIAO_POR_UF)
 
 print(f"[DASH] Pronto — {len(df_mun)} registros carregados. Subindo servidor...", flush=True)
 
-# ── GeoJSON dos municípios (simplificado) ─────────────────────────────────────
-print("[DASH] Carregando GeoJSON de municípios...", flush=True)
-GEOJSON_URL = "https://raw.githubusercontent.com/tbrugz/geodata-br/master/geojson/geojs-100-mun.json"
+# ── GeoJSON dos municípios (simplificado — resolução mínima) ──────────────────
+print("[DASH] Carregando GeoJSON de municípios (simplificado)...", flush=True)
+GEOJSON_MUN_URL = "https://raw.githubusercontent.com/tbrugz/geodata-br/master/geojson/geojs-35-mun.json"
 try:
-    geojson_municipios = requests.get(GEOJSON_URL, timeout=60).json()
+    geojson_municipios = requests.get(GEOJSON_MUN_URL, timeout=90).json()
     # Padronizar código do município para 6 dígitos (sem dígito verificador)
     for feat in geojson_municipios["features"]:
         cod = str(feat["properties"].get("id", "")).strip()
         feat["properties"]["id"] = cod[:6] if len(cod) >= 6 else cod
-    print(f"[DASH] GeoJSON carregado — {len(geojson_municipios['features'])} municípios", flush=True)
+    # Criar índice para filtro rápido
+    geojson_por_cod = {f["properties"]["id"]: f for f in geojson_municipios["features"]}
+    print(f"[DASH] GeoJSON municípios carregado — {len(geojson_municipios['features'])} feições", flush=True)
 except Exception as e:
-    print(f"[DASH] ERRO ao carregar GeoJSON: {e}. Mapa ficará indisponível.", flush=True)
+    print(f"[DASH] ERRO ao carregar GeoJSON municípios: {e}. Mapa ficará indisponível.", flush=True)
     geojson_municipios = {"type": "FeatureCollection", "features": []}
+    geojson_por_cod = {}
+
+# GeoJSON de estados (leve, para contorno no mapa)
+print("[DASH] Carregando GeoJSON de estados...", flush=True)
+GEOJSON_UF_URL = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson"
+try:
+    geojson_estados = requests.get(GEOJSON_UF_URL, timeout=30).json()
+    print(f"[DASH] GeoJSON estados carregado — {len(geojson_estados['features'])} UFs", flush=True)
+except Exception as e:
+    print(f"[DASH] ERRO ao carregar GeoJSON estados: {e}", flush=True)
+    geojson_estados = {"type": "FeatureCollection", "features": []}
 
 # ── Cores ─────────────────────────────────────────────────────────────────────
 COR_HEADER = "#1B3A5C"
@@ -386,13 +399,10 @@ def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
         )
         return fig_vazio
 
-    # Filtra GeoJSON apenas para municípios com dados (performance)
+    # Filtra GeoJSON apenas para municípios com dados (muito mais rápido)
     codigos_com_dados = set(df_agg['cod6'].tolist())
-    geojson_filtrado = {
-        "type": "FeatureCollection",
-        "features": [f for f in geojson_municipios["features"]
-                     if f["properties"]["id"] in codigos_com_dados]
-    }
+    features_filtradas = [geojson_por_cod[c] for c in codigos_com_dados if c in geojson_por_cod]
+    geojson_filtrado = {"type": "FeatureCollection", "features": features_filtradas}
 
     fig = px.choropleth_mapbox(
         df_agg,
@@ -419,10 +429,10 @@ def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
         ),
         mapbox=dict(
             layers=[{
-                "source": geojson_municipios,
+                "source": geojson_estados,
                 "type": "line",
-                "color": "#cbd5e0",
-                "opacity": 0.3,
+                "color": "#a0aec0",
+                "opacity": 0.6,
                 "below": "traces",
             }],
         ),
