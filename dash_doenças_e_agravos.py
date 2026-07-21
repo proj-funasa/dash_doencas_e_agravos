@@ -5,7 +5,6 @@ import dash
 from dash import dcc, html, Input, Output
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 import trino
 
 TRINO_HOST = os.getenv("TRINO_HOST", "trino.trino.svc.cluster.local")
@@ -103,28 +102,43 @@ df_mun['regiao']           = df_mun['uf'].map(REGIAO_POR_UF)
 
 print(f"[DASH] Pronto — {len(df_mun)} registros carregados. Subindo servidor...", flush=True)
 
-# ── GeoJSON dos municípios (simplificado — resolução mínima) ──────────────────
-print("[DASH] Carregando coordenadas dos municípios...", flush=True)
-COORDS_URL = "https://raw.githubusercontent.com/kelvins/municipios-brasileiros/main/csv/municipios.csv"
-try:
-    df_coords = pd.read_csv(COORDS_URL, dtype={'codigo_ibge': str})
-    df_coords['cod6'] = df_coords['codigo_ibge'].str[:6]
-    df_coords = df_coords[['cod6', 'latitude', 'longitude']].drop_duplicates(subset='cod6')
-    coords_dict = df_coords.set_index('cod6')[['latitude', 'longitude']].to_dict('index')
-    print(f"[DASH] Coordenadas carregadas — {len(coords_dict)} municípios", flush=True)
-except Exception as e:
-    print(f"[DASH] ERRO ao carregar coordenadas: {e}. Mapa ficará indisponível.", flush=True)
-    coords_dict = {}
+# ── GeoJSON dos municípios (IBGE, qualidade mínima) ───────────────────────────
+print("[DASH] Carregando GeoJSON de municípios (IBGE)...", flush=True)
+CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
+IBGE_GEOJSON_CACHE = os.path.join(CACHE_DIR, "ibge_municipios_minima.geojson")
+IBGE_GEOJSON_URL = "https://servicodados.ibge.gov.br/api/v4/malhas/paises/BR"
 
-# GeoJSON de estados (contorno leve para o mapa)
-print("[DASH] Carregando GeoJSON de estados...", flush=True)
-GEOJSON_UF_URL = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson"
 try:
-    geojson_estados = requests.get(GEOJSON_UF_URL, timeout=30).json()
-    print(f"[DASH] GeoJSON estados carregado — {len(geojson_estados['features'])} UFs", flush=True)
+    if os.path.exists(IBGE_GEOJSON_CACHE):
+        with open(IBGE_GEOJSON_CACHE, encoding="utf-8") as f:
+            geojson_municipios = json.load(f)
+    else:
+        resp = requests.get(
+            IBGE_GEOJSON_URL,
+            params={"intrarregiao": "municipio", "formato": "application/vnd.geo+json", "qualidade": "minima"},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        geojson_municipios = resp.json()
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(IBGE_GEOJSON_CACHE, "w", encoding="utf-8") as f:
+            json.dump(geojson_municipios, f)
+    # Extrair lista de IDs para o mapa
+    geojson_ids = [str(feat["properties"].get("codarea", "")) for feat in geojson_municipios.get("features", [])]
+    # Mapa de cod6 (sem dígito verificador) -> cod7 (com dígito verificador)
+    cod6_to_cod7 = {cod7[:6]: cod7 for cod7 in geojson_ids if len(cod7) >= 6}
+    print(f"[DASH] GeoJSON carregado — {len(geojson_ids)} municípios", flush=True)
 except Exception as e:
-    print(f"[DASH] ERRO ao carregar GeoJSON estados: {e}", flush=True)
-    geojson_estados = {"type": "FeatureCollection", "features": []}
+    print(f"[DASH] ERRO ao carregar GeoJSON: {e}. Mapa ficará indisponível.", flush=True)
+    geojson_municipios = {"type": "FeatureCollection", "features": []}
+    geojson_ids = []
+
+# Estilo do mapa (igual ao Painel Municípios)
+FUNASA_MAP_STYLE = {
+    "version": 8,
+    "sources": {},
+    "layers": [{"id": "background", "type": "background", "paint": {"background-color": "#E8F0F3"}}],
+}
 
 # ── Cores ─────────────────────────────────────────────────────────────────────
 COR_HEADER = "#1B3A5C"
@@ -265,7 +279,8 @@ app.layout = html.Div(
 
                     dcc.Loading(
                         dcc.Graph(id="mapa-municipios",
-                                  config={"displayModeBar": True, "scrollZoom": True,
+                                  config={"displayModeBar": "hover", "scrollZoom": True,
+                                          "displaylogo": False,
                                           "modeBarButtonsToRemove": ["toImage", "lasso2d", "select2d"]}),
                         type="circle",
                     ),
@@ -371,88 +386,95 @@ def atualizar_opcoes_uf(regiao_sel):
     Input("mapa-filtro-mes", "value"),
 )
 def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
-    df = df_mun[df_mun['doenca'] == doenca_sel].copy()
-
+    # Filtrar por período
+    df_filtrado = df_mun.copy()
     if ano_sel != "Todos":
-        df = df[df['ano'] == ano_sel]
+        df_filtrado = df_filtrado[df_filtrado['ano'] == ano_sel]
     if mes_sel != "Todos":
-        df = df[df['mes'] == mes_sel]
+        df_filtrado = df_filtrado[df_filtrado['mes'] == mes_sel]
 
-    # Agregar por município (código com 6 dígitos)
-    df['cod6'] = df['codigo_municipio'].str[:6]
-    df_agg = df.groupby(['cod6', 'nome_municipio', 'uf'], as_index=False)['casos_mes'].sum()
-    df_agg = df_agg.rename(columns={'casos_mes': 'total_casos'})
-    df_agg = df_agg[df_agg['total_casos'] > 0]
+    # Agregar TODAS as doenças por município (cod7 = código com 7 dígitos do IBGE)
+    df_filtrado['cod6'] = df_filtrado['codigo_municipio'].astype(str).str.strip()
+    df_agg = df_filtrado.groupby(['cod6', 'nome_municipio', 'uf', 'doenca'], as_index=False)['casos_mes'].sum()
 
-    if df_agg.empty:
-        fig_vazio = go.Figure()
-        fig_vazio.update_layout(
-            plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
-            xaxis={"visible": False}, yaxis={"visible": False},
-            annotations=[{"text": "Nenhum dado encontrado para os filtros selecionados",
-                          "showarrow": False, "font": {"size": 14, "color": "#9ca3af"}}],
-            height=500,
-        )
-        return fig_vazio
+    # Pivotar para ter uma coluna por doença
+    df_pivot = df_agg.pivot_table(
+        index=['cod6', 'nome_municipio', 'uf'],
+        columns='doenca', values='casos_mes', fill_value=0
+    ).reset_index()
+    df_pivot.columns.name = None
 
-    # Adicionar coordenadas
-    df_agg['latitude'] = df_agg['cod6'].map(lambda c: coords_dict.get(c, {}).get('latitude'))
-    df_agg['longitude'] = df_agg['cod6'].map(lambda c: coords_dict.get(c, {}).get('longitude'))
-    df_agg = df_agg.dropna(subset=['latitude', 'longitude'])
+    for d in doencas:
+        if d not in df_pivot.columns:
+            df_pivot[d] = 0
 
-    if df_agg.empty:
-        fig_vazio = go.Figure()
-        fig_vazio.update_layout(
-            plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
-            xaxis={"visible": False}, yaxis={"visible": False},
-            annotations=[{"text": "Coordenadas não encontradas",
-                          "showarrow": False, "font": {"size": 14, "color": "#9ca3af"}}],
-            height=500,
-        )
-        return fig_vazio
+    # Total da doença selecionada (define cor)
+    df_pivot['casos_sel'] = df_pivot[doenca_sel]
 
-    fig = px.scatter_mapbox(
-        df_agg,
-        lat="latitude",
-        lon="longitude",
-        color="total_casos",
-        size="total_casos",
-        size_max=18,
-        color_continuous_scale="YlOrRd",
-        hover_name="nome_municipio",
-        hover_data={"latitude": False, "longitude": False, "cod6": False,
-                    "uf": True, "total_casos": ":,.0f"},
-        labels={"total_casos": "Casos", "uf": "UF"},
-        mapbox_style="white-bg",
-        center={"lat": -14.2, "lon": -51.9},
-        zoom=3.3,
-        opacity=0.75,
-    )
+    # Apenas municípios com dados em qualquer doença
+    colunas_doencas = [d for d in doencas if d in df_pivot.columns]
+    df_pivot['total_geral'] = df_pivot[colunas_doencas].sum(axis=1)
+    df_com_dados = df_pivot[df_pivot['total_geral'] > 0].copy()
+
+    # Mapear cod6 -> cod7 para compatibilizar com GeoJSON do IBGE
+    df_com_dados['cod7'] = df_com_dados['cod6'].map(cod6_to_cod7)
+    df_com_dados = df_com_dados.dropna(subset=['cod7'])
+    ids_com_dados = set(df_com_dados['cod7'].tolist())
+    z_values = [1 if loc in ids_com_dados else 0 for loc in geojson_ids]
+
+    # Montar hover com todas as doenças
+    hover_dict = {}
+    for _, row in df_com_dados.iterrows():
+        linhas = [f"<b>{row['nome_municipio']}</b> ({row['uf']})"]
+        for d in doencas:
+            val = int(row.get(d, 0))
+            if val > 0:
+                marcador = " ◀" if d == doenca_sel else ""
+                linhas.append(f"{nomes_exibicao[d]}: <b>{val:,.0f}</b>{marcador}".replace(",", "."))
+        hover_dict[row['cod7']] = "<br>".join(linhas)
+
+    customdata = [hover_dict.get(loc, f"Código IBGE: {loc}<br>Sem dados no período") for loc in geojson_ids]
+
+    fig = go.Figure()
+
+    # Choropleth base (todos os municípios)
+    fig.add_trace(go.Choroplethmap(
+        geojson=geojson_municipios,
+        locations=geojson_ids,
+        z=z_values,
+        featureidkey="properties.codarea",
+        zmin=0,
+        zmax=1,
+        colorscale=[
+            [0, "#F8FAFB"],
+            [0.4999, "#F8FAFB"],
+            [0.5, "#DCECF5"],
+            [1, "#DCECF5"],
+        ],
+        marker_opacity=0.95,
+        marker_line_color="#C5D1D9",
+        marker_line_width=0.35,
+        customdata=customdata,
+        hovertemplate="%{customdata}<extra></extra>",
+        showscale=False,
+    ))
+
     fig.update_layout(
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=550,
-        coloraxis_colorbar=dict(
-            title="Casos",
-            thickness=15,
-            len=0.7,
+        map=dict(
+            style=FUNASA_MAP_STYLE,
+            center={"lat": -14.2, "lon": -51.9},
+            zoom=3.3,
         ),
-        mapbox=dict(
-            layers=[
-                {
-                    "source": geojson_estados,
-                    "type": "fill",
-                    "color": "#e8edf2",
-                    "opacity": 0.4,
-                    "below": "traces",
-                },
-                {
-                    "source": geojson_estados,
-                    "type": "line",
-                    "color": "#c0c8d0",
-                    "opacity": 0.5,
-                    "below": "traces",
-                },
-            ],
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=580,
+        paper_bgcolor="#E8F0F3",
+        plot_bgcolor="#E8F0F3",
+        dragmode="pan",
+        hovermode="closest",
+        hoverlabel=dict(
+            bgcolor="#ffffff",
+            bordercolor="#e2e8f0",
+            font=dict(family="Inter, sans-serif", size=12, color="#2d3748"),
         ),
     )
     return fig
