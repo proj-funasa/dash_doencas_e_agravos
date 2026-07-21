@@ -101,62 +101,102 @@ df_mun['regiao']           = df_mun['uf'].map(REGIAO_POR_UF)
 
 print(f"[DASH] Pronto — {len(df_mun)} registros carregados. Subindo servidor...", flush=True)
 
-# ── Coordenadas dos municípios e Mapa ─────────────────────────────────────────
-import plotly.express as px
-import numpy as np
+# ── GeoJSON dos municípios (IBGE, qualidade mínima) e Mapa ────────────────────
+import json
 
-print("[DASH] Carregando coordenadas dos municípios...", flush=True)
-COORDS_URL = "https://raw.githubusercontent.com/kelvins/municipios-brasileiros/main/csv/municipios.csv"
-COORDS_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache", "municipios_coords.csv")
+print("[DASH] Carregando GeoJSON de municípios (IBGE)...", flush=True)
+CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
+IBGE_GEOJSON_CACHE = os.path.join(CACHE_DIR, "ibge_municipios_minima.geojson")
+IBGE_GEOJSON_URL = "https://servicodados.ibge.gov.br/api/v4/malhas/paises/BR"
 
 try:
-    os.makedirs(os.path.dirname(COORDS_CACHE), exist_ok=True)
-    if os.path.exists(COORDS_CACHE):
-        df_coords = pd.read_csv(COORDS_CACHE, dtype={'codigo_ibge': str})
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    if os.path.exists(IBGE_GEOJSON_CACHE):
+        with open(IBGE_GEOJSON_CACHE, encoding="utf-8") as f:
+            geojson_municipios = json.load(f)
     else:
-        df_coords = pd.read_csv(COORDS_URL, dtype={'codigo_ibge': str})
-        df_coords.to_csv(COORDS_CACHE, index=False)
-    df_coords['cod6'] = df_coords['codigo_ibge'].str[:6]
-    df_coords = df_coords[['cod6', 'latitude', 'longitude']].drop_duplicates(subset='cod6')
-    print(f"[DASH] Coordenadas carregadas — {len(df_coords)} municípios", flush=True)
+        resp = requests.get(
+            IBGE_GEOJSON_URL,
+            params={"intrarregiao": "municipio", "formato": "application/vnd.geo+json", "qualidade": "minima"},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        geojson_municipios = resp.json()
+        with open(IBGE_GEOJSON_CACHE, "w", encoding="utf-8") as f:
+            json.dump(geojson_municipios, f)
+    geojson_ids = [str(feat["properties"].get("codarea", "")) for feat in geojson_municipios.get("features", [])]
+    cod6_to_cod7 = {cod7[:6]: cod7 for cod7 in geojson_ids if len(cod7) >= 6}
+    print(f"[DASH] GeoJSON carregado — {len(geojson_ids)} municípios", flush=True)
 except Exception as e:
-    print(f"[DASH] AVISO: coordenadas indisponíveis ({e}). Mapa será omitido.", flush=True)
-    df_coords = pd.DataFrame(columns=['cod6', 'latitude', 'longitude'])
+    print(f"[DASH] ERRO ao carregar GeoJSON: {e}. Mapa indisponível.", flush=True)
+    geojson_municipios = {"type": "FeatureCollection", "features": []}
+    geojson_ids = []
+    cod6_to_cod7 = {}
 
-# Agregar total por município+doença (para hover) e total geral (para tamanho)
-print("[DASH] Preparando dados do mapa...", flush=True)
-_df_mapa_base = df_mun.groupby(['codigo_municipio', 'nome_municipio', 'uf', 'doenca'], as_index=False)['casos_mes'].sum()
-_df_total_mun = _df_mapa_base.groupby(['codigo_municipio', 'nome_municipio', 'uf'], as_index=False)['casos_mes'].sum()
-_df_total_mun = _df_total_mun.rename(columns={'casos_mes': 'total_casos'})
-_df_total_mun['cod6'] = _df_total_mun['codigo_municipio'].astype(str).str.strip()
-_df_total_mun = _df_total_mun.merge(df_coords, on='cod6', how='inner')
-_df_total_mun = _df_total_mun[_df_total_mun['total_casos'] > 0].copy()
+# Carregar dados agregados para o mapa (tabela leve, sem ano/mês)
+print("[DASH] Carregando dados para mapa...", flush=True)
+df_mapa_raw = query("SELECT codigo_municipio, nome_municipio, doenca, total_casos FROM seaweedfs.gold.casos_por_municipio")
+df_mapa_raw['codigo_municipio'] = df_mapa_raw['codigo_municipio'].astype(str).str.strip()
+df_mapa_raw['nome_municipio'] = df_mapa_raw['nome_municipio'].str.title()
+df_mapa_raw['total_casos'] = pd.to_numeric(df_mapa_raw['total_casos'], errors='coerce').fillna(0).astype(int)
+df_mapa_raw['uf'] = df_mapa_raw['codigo_municipio'].str[:2].map(UF_POR_CODIGO)
 
-# Pivotar doenças para hover
-_df_pivot = _df_mapa_base.pivot_table(
-    index=['codigo_municipio'], columns='doenca', values='casos_mes', fill_value=0
-).reset_index()
-_df_pivot.columns.name = None
-_df_total_mun = _df_total_mun.merge(_df_pivot, on='codigo_municipio', how='left')
+# Pivotar para hover com todas as doenças
+_pivot = df_mapa_raw.pivot_table(index=['codigo_municipio', 'nome_municipio', 'uf'],
+                                  columns='doenca', values='total_casos', fill_value=0).reset_index()
+_pivot.columns.name = None
+for d in doencas:
+    if d not in _pivot.columns:
+        _pivot[d] = 0
+_pivot['total_geral'] = _pivot[[d for d in doencas if d in _pivot.columns]].sum(axis=1)
+_pivot = _pivot[_pivot['total_geral'] > 0].copy()
+_pivot['cod7'] = _pivot['codigo_municipio'].map(cod6_to_cod7)
+_pivot = _pivot.dropna(subset=['cod7'])
+_ids_com_dados = set(_pivot['cod7'].tolist())
 
-# Montar hover com todas as doenças
-def _build_hover(row):
+_z_values = [1 if loc in _ids_com_dados else 0 for loc in geojson_ids]
+
+_hover_dict = {}
+for _, row in _pivot.iterrows():
     linhas = [f"<b>{row['nome_municipio']}</b> ({row['uf']})"]
-    linhas.append(f"Total: <b>{int(row['total_casos']):,.0f}</b>".replace(",", "."))
     for d in doencas:
         val = int(row.get(d, 0))
         if val > 0:
-            linhas.append(f"  {nomes_exibicao[d]}: {val:,.0f}".replace(",", "."))
-    return "<br>".join(linhas)
+            linhas.append(f"{nomes_exibicao[d]}: <b>{val:,.0f}</b>".replace(",", "."))
+    _hover_dict[row['cod7']] = "<br>".join(linhas)
 
-_df_total_mun['hover'] = _df_total_mun.apply(_build_hover, axis=1)
+_customdata = [_hover_dict.get(loc, "") for loc in geojson_ids]
 
-# Guardar DataFrame para uso no callback de filtro
-df_mapa_pontos = _df_total_mun[['cod6', 'nome_municipio', 'uf', 'latitude', 'longitude', 'total_casos', 'hover']].copy()
-df_mapa_pontos['nome_busca'] = df_mapa_pontos['nome_municipio'].str.lower()
+FUNASA_MAP_STYLE = {
+    "version": 8, "sources": {},
+    "layers": [{"id": "background", "type": "background", "paint": {"background-color": "#E8F0F3"}}],
+}
 
-del _df_mapa_base, _df_total_mun, _df_pivot
-print(f"[DASH] Dados do mapa prontos — {len(df_mapa_pontos)} municípios com casos.", flush=True)
+fig_mapa = go.Figure()
+fig_mapa.add_trace(go.Choroplethmap(
+    geojson=geojson_municipios,
+    locations=geojson_ids,
+    z=_z_values,
+    featureidkey="properties.codarea",
+    zmin=0, zmax=1,
+    colorscale=[[0, "#F8FAFB"], [0.4999, "#F8FAFB"], [0.5, "#DCECF5"], [1, "#DCECF5"]],
+    marker_opacity=0.95,
+    marker_line_color="#C5D1D9",
+    marker_line_width=0.35,
+    customdata=_customdata,
+    hovertemplate="%{customdata}<extra></extra>",
+    showscale=False,
+))
+fig_mapa.update_layout(
+    map=dict(style=FUNASA_MAP_STYLE, center={"lat": -14.2, "lon": -51.9}, zoom=3.3),
+    margin=dict(l=0, r=0, t=0, b=0), height=580,
+    paper_bgcolor="#E8F0F3", plot_bgcolor="#E8F0F3",
+    dragmode="pan", hovermode="closest",
+    hoverlabel=dict(bgcolor="#ffffff", bordercolor="#e2e8f0",
+                    font=dict(family="Inter, sans-serif", size=12, color="#2d3748")),
+)
+del _pivot, _ids_com_dados, _z_values, _hover_dict, _customdata, df_mapa_raw
+print("[DASH] Mapa pronto.", flush=True)
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app    = dash.Dash(__name__, title="Doenças e Agravos — SINAN", suppress_callback_exceptions=True,
@@ -206,24 +246,13 @@ app.layout = html.Div(
                 dcc.Graph(figure=fig_barras, config={"displayModeBar": False}),
             ]),
 
-            # ── Mapa de Casos por Município ───────────────────────────────────
+            # ── Mapa por Município ─────────────────────────────────────────────
             html.Div(style={"marginTop": 24}, children=[
                 _card([
-                    _titulo("Mapa de Casos por Município (2007–2025)"),
-
-                    html.Div([
-                        html.Label("Buscar município", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
-                        dcc.Input(
-                            id="mapa-busca",
-                            type="text",
-                            placeholder="Digite o nome do município...",
-                            debounce=True,
-                            style={"width": "300px", "fontSize": 13, "padding": "6px 12px",
-                                   "border": "1px solid #e2e8f0", "borderRadius": 6},
-                        ),
-                    ], style={"marginTop": 12, "marginBottom": 12}),
+                    _titulo("Mapa de Casos por Município — Todas as Doenças (2007–2025)"),
 
                     dcc.Graph(id="mapa-municipios",
+                              figure=fig_mapa,
                               config={"displayModeBar": "hover", "scrollZoom": True,
                                       "displaylogo": False,
                                       "modeBarButtonsToRemove": ["toImage", "lasso2d", "select2d"]}),
@@ -305,69 +334,6 @@ app.layout = html.Div(
         ]),
     ]
 )
-
-
-# ── Callback: Mapa de pontos por município ────────────────────────────────────
-@app.callback(
-    Output("mapa-municipios", "figure"),
-    Input("mapa-busca", "value"),
-)
-def atualizar_mapa(busca):
-    df = df_mapa_pontos.copy()
-
-    # Filtrar por nome se preenchido
-    if busca and busca.strip():
-        termo = busca.strip().lower()
-        df = df[df['nome_busca'].str.contains(termo, na=False)]
-
-    if df.empty:
-        fig_vazio = go.Figure()
-        fig_vazio.update_layout(
-            mapbox=dict(style="carto-positron", center={"lat": -14.2, "lon": -51.9}, zoom=3.3),
-            margin=dict(l=0, r=0, t=0, b=0), height=580,
-            annotations=[{"text": "Nenhum município encontrado", "showarrow": False,
-                          "font": {"size": 14, "color": "#9ca3af"}, "xref": "paper", "yref": "paper",
-                          "x": 0.5, "y": 0.5}],
-        )
-        return fig_vazio
-
-    # Tamanho proporcional ao log dos casos (evita pontos gigantes)
-    df['size'] = np.clip(np.log10(df['total_casos'] + 1) * 3, 4, 20)
-
-    fig = go.Figure(go.Scattermapbox(
-        lat=df['latitude'],
-        lon=df['longitude'],
-        mode='markers',
-        marker=dict(
-            size=df['size'],
-            color=df['total_casos'],
-            colorscale='YlOrRd',
-            showscale=True,
-            colorbar=dict(title="Casos", thickness=12, len=0.6),
-            opacity=0.7,
-            cmin=0,
-            cmax=df['total_casos'].quantile(0.95),
-        ),
-        text=df['hover'],
-        hovertemplate="%{text}<extra></extra>",
-    ))
-
-    # Centralizar no resultado quando busca ativa
-    if busca and busca.strip() and len(df) <= 50:
-        center = {"lat": df['latitude'].mean(), "lon": df['longitude'].mean()}
-        zoom = 6 if len(df) <= 5 else 4.5
-    else:
-        center = {"lat": -14.2, "lon": -51.9}
-        zoom = 3.3
-
-    fig.update_layout(
-        mapbox=dict(style="carto-positron", center=center, zoom=zoom),
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=580,
-        hoverlabel=dict(bgcolor="#ffffff", bordercolor="#e2e8f0",
-                        font=dict(family="Inter, sans-serif", size=12, color="#2d3748")),
-    )
-    return fig
 
 
 # ── Callback: UF cascateia com região ────────────────────────────────────────

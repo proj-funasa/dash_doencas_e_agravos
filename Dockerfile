@@ -8,10 +8,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Baixar coordenadas dos municípios no build (evita download em runtime)
+# Baixar GeoJSON do IBGE no build (evita download em runtime)
 RUN mkdir -p /app/.cache && \
-    curl -sL -o /app/.cache/municipios_coords.csv \
-    "https://raw.githubusercontent.com/kelvins/municipios-brasileiros/main/csv/municipios.csv"
+    curl -sL -o /app/.cache/ibge_municipios_minima.geojson \
+    "https://servicodados.ibge.gov.br/api/v4/malhas/paises/BR?intrarregiao=municipio&formato=application/vnd.geo%2Bjson&qualidade=minima"
 
 EXPOSE 8050
 HEALTHCHECK CMD curl --fail http://localhost:8050/doencas-agravos/ || exit 1
