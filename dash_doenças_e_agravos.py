@@ -112,23 +112,10 @@ try:
     for feat in geojson_municipios["features"]:
         cod = str(feat["properties"].get("id", "")).strip()
         feat["properties"]["id"] = cod[:6] if len(cod) >= 6 else cod
-    # Criar índice para filtro rápido
-    geojson_por_cod = {f["properties"]["id"]: f for f in geojson_municipios["features"]}
     print(f"[DASH] GeoJSON municípios carregado — {len(geojson_municipios['features'])} feições", flush=True)
 except Exception as e:
     print(f"[DASH] ERRO ao carregar GeoJSON municípios: {e}. Mapa ficará indisponível.", flush=True)
     geojson_municipios = {"type": "FeatureCollection", "features": []}
-    geojson_por_cod = {}
-
-# GeoJSON de estados (leve, para contorno no mapa)
-print("[DASH] Carregando GeoJSON de estados...", flush=True)
-GEOJSON_UF_URL = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson"
-try:
-    geojson_estados = requests.get(GEOJSON_UF_URL, timeout=30).json()
-    print(f"[DASH] GeoJSON estados carregado — {len(geojson_estados['features'])} UFs", flush=True)
-except Exception as e:
-    print(f"[DASH] ERRO ao carregar GeoJSON estados: {e}", flush=True)
-    geojson_estados = {"type": "FeatureCollection", "features": []}
 
 # ── Cores ─────────────────────────────────────────────────────────────────────
 COR_HEADER = "#1B3A5C"
@@ -399,14 +386,9 @@ def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
         )
         return fig_vazio
 
-    # Filtra GeoJSON apenas para municípios com dados (muito mais rápido)
-    codigos_com_dados = set(df_agg['cod6'].tolist())
-    features_filtradas = [geojson_por_cod[c] for c in codigos_com_dados if c in geojson_por_cod]
-    geojson_filtrado = {"type": "FeatureCollection", "features": features_filtradas}
-
     fig = px.choropleth_mapbox(
         df_agg,
-        geojson=geojson_filtrado,
+        geojson=geojson_municipios,
         locations="cod6",
         featureidkey="properties.id",
         color="total_casos",
@@ -414,10 +396,10 @@ def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
         hover_name="nome_municipio",
         hover_data={"cod6": False, "uf": True, "total_casos": ":,.0f"},
         labels={"total_casos": "Casos", "uf": "UF"},
-        mapbox_style="white-bg",
+        mapbox_style="carto-positron",
         center={"lat": -14.2, "lon": -51.9},
         zoom=3.3,
-        opacity=0.8,
+        opacity=0.75,
     )
     fig.update_layout(
         margin=dict(l=0, r=0, t=0, b=0),
@@ -426,15 +408,6 @@ def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
             title="Casos",
             thickness=15,
             len=0.7,
-        ),
-        mapbox=dict(
-            layers=[{
-                "source": geojson_estados,
-                "type": "line",
-                "color": "#a0aec0",
-                "opacity": 0.6,
-                "below": "traces",
-            }],
         ),
     )
     return fig
