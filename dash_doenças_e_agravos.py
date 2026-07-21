@@ -74,6 +74,13 @@ for uf, regiao in REGIAO_POR_UF.items():
 regioes = sorted(set(REGIAO_POR_UF.values()))
 ufs     = sorted(REGIAO_POR_UF.keys())
 anos    = [str(a) for a in range(2007, 2026)]
+meses   = [str(m).zfill(2) for m in range(1, 13)]
+
+NOME_MES = {
+    '01': 'Janeiro', '02': 'Fevereiro', '03': 'Março', '04': 'Abril',
+    '05': 'Maio', '06': 'Junho', '07': 'Julho', '08': 'Agosto',
+    '09': 'Setembro', '10': 'Outubro', '11': 'Novembro', '12': 'Dezembro'
+}
 
 # ── Carregar dados do Gold na inicialização ───────────────────────────────────
 print("[DASH] Carregando KPIs...", flush=True)
@@ -81,15 +88,17 @@ df_total = query("SELECT doenca, total_casos FROM seaweedfs.gold.kpi_total_por_d
 df_total['total_casos'] = pd.to_numeric(df_total['total_casos'], errors='coerce').fillna(0).astype(int)
 df_total = df_total.set_index('doenca').reindex(doencas).reset_index()
 
-print("[DASH] Carregando municípios (sem ano)...", flush=True)
-df_mun = query("SELECT codigo_municipio, nome_municipio, doenca, total_casos FROM seaweedfs.gold.casos_por_municipio")
+print("[DASH] Carregando casos mensais (com ano e mês)...", flush=True)
+df_mun = query("SELECT codigo_municipio, nome_municipio, ano, mes, doenca, casos_mes FROM seaweedfs.gold.casos_mensais")
 df_mun['codigo_municipio'] = df_mun['codigo_municipio'].astype(str).str.strip()
 df_mun['nome_municipio']   = df_mun['nome_municipio'].str.title()
-df_mun['total_casos']      = pd.to_numeric(df_mun['total_casos'], errors='coerce').fillna(0).astype(int)
+df_mun['casos_mes']        = pd.to_numeric(df_mun['casos_mes'], errors='coerce').fillna(0).astype(int)
+df_mun['ano']              = df_mun['ano'].astype(str).str.strip()
+df_mun['mes']              = df_mun['mes'].astype(str).str.strip().str.zfill(2)
 df_mun['uf']               = df_mun['codigo_municipio'].str[:2].map(UF_POR_CODIGO)
 df_mun['regiao']           = df_mun['uf'].map(REGIAO_POR_UF)
 
-print(f"[DASH] Pronto — {len(df_mun)} municípios carregados. Subindo servidor...", flush=True)
+print(f"[DASH] Pronto — {len(df_mun)} registros carregados. Subindo servidor...", flush=True)
 
 # ── Cores ─────────────────────────────────────────────────────────────────────
 COR_HEADER = "#1B3A5C"
@@ -226,6 +235,26 @@ app.layout = html.Div(
                                 style={"width": "120px", "fontSize": 13},
                             ),
                         ]),
+                        html.Div([
+                            html.Label("Ano", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
+                            dcc.Dropdown(
+                                id="filtro-ano",
+                                options=[{"label": "Todos", "value": "Todos"}] +
+                                        [{"label": a, "value": a} for a in anos],
+                                value="Todos", clearable=False,
+                                style={"width": "120px", "fontSize": 13},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("Mês", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
+                            dcc.Dropdown(
+                                id="filtro-mes",
+                                options=[{"label": "Todos", "value": "Todos"}] +
+                                        [{"label": NOME_MES[m], "value": m} for m in meses],
+                                value="Todos", clearable=False,
+                                style={"width": "140px", "fontSize": 13},
+                            ),
+                        ]),
                     ], id="filtros-container", style={"display": "flex", "gap": 16, "marginTop": 16,
                                "marginBottom": 20, "flexWrap": "wrap"}),
 
@@ -261,7 +290,7 @@ def atualizar_opcoes_uf(regiao_sel):
     return [{"label": "Todas", "value": "Todos"}] + [{"label": u, "value": u} for u in lista], "Todos"
 
 
-# ── Callback: Gráfico + Tabela — filtra em memória (sem filtro de ano) ────────
+# ── Callback: Gráfico + Tabela — filtra em memória ───────────────────────────
 @app.callback(
     Output("grafico-top10", "children"),
     Output("tabela-municipios", "children"),
@@ -269,17 +298,26 @@ def atualizar_opcoes_uf(regiao_sel):
     Input("filtro-doenca", "value"),
     Input("filtro-regiao", "value"),
     Input("filtro-uf", "value"),
+    Input("filtro-ano", "value"),
+    Input("filtro-mes", "value"),
 )
-def atualizar_municipios(doenca_sel, regiao_sel, uf_sel):
+def atualizar_municipios(doenca_sel, regiao_sel, uf_sel, ano_sel, mes_sel):
 
-    # ── Filtra em memória — dados totais sem recorte de ano ───────────
+    # ── Filtra em memória ─────────────────────────────────────────────
     df = df_mun[df_mun['doenca'] == doenca_sel].copy()
 
     if regiao_sel != "Todos":
         df = df[df['regiao'] == regiao_sel]
     if uf_sel != "Todos":
         df = df[df['uf'] == uf_sel]
+    if ano_sel != "Todos":
+        df = df[df['ano'] == ano_sel]
+    if mes_sel != "Todos":
+        df = df[df['mes'] == mes_sel]
 
+    # Agrega por município (soma dos meses/anos filtrados)
+    df = df.groupby(['codigo_municipio', 'nome_municipio', 'uf', 'regiao'], as_index=False)['casos_mes'].sum()
+    df = df.rename(columns={'casos_mes': 'total_casos'})
     df = df.dropna(subset=['nome_municipio']).sort_values("total_casos", ascending=False)
 
     if df.empty:
