@@ -411,10 +411,8 @@ def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
     # Total da doença selecionada (define cor)
     df_pivot['casos_sel'] = df_pivot[doenca_sel]
 
-    # Apenas municípios com dados em qualquer doença
-    colunas_doencas = [d for d in doencas if d in df_pivot.columns]
-    df_pivot['total_geral'] = df_pivot[colunas_doencas].sum(axis=1)
-    df_com_dados = df_pivot[df_pivot['total_geral'] > 0].copy()
+    # Apenas municípios com dados na doença selecionada definem o destaque
+    df_com_dados = df_pivot[df_pivot['casos_sel'] > 0].copy()
 
     # Mapear cod6 -> cod7 para compatibilizar com GeoJSON do IBGE
     df_com_dados['cod7'] = df_com_dados['cod6'].map(cod6_to_cod7)
