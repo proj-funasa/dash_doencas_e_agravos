@@ -1,7 +1,7 @@
 import os
 import requests
 import dash
-from dash import dcc, html, Input, Output
+from dash import dcc, html, Input, Output, Patch
 import pandas as pd
 import plotly.graph_objects as go
 import trino
@@ -181,8 +181,8 @@ fig_mapa.add_trace(go.Choroplethmap(
     zmin=0, zmax=1,
     colorscale=[[0, "#F8FAFB"], [0.4999, "#F8FAFB"], [0.5, "#DCECF5"], [1, "#DCECF5"]],
     marker_opacity=0.95,
-    marker_line_color="#C5D1D9",
-    marker_line_width=0.35,
+    marker_line_color="#8FA3B3",
+    marker_line_width=0.5,
     customdata=_customdata,
     hovertemplate="%{customdata}<extra></extra>",
     showscale=False,
@@ -194,8 +194,17 @@ fig_mapa.update_layout(
     dragmode="pan", hovermode="closest",
     hoverlabel=dict(bgcolor="#ffffff", bordercolor="#e2e8f0",
                     font=dict(family="Inter, sans-serif", size=12, color="#2d3748")),
+    uirevision="mapa-doencas",
 )
-del _pivot, _ids_com_dados, _z_values, _hover_dict, _customdata, df_mapa_raw
+
+# Guardar dados para callback de busca (cod7 -> nome para lookup)
+_mapa_busca_data = _pivot[['cod7', 'nome_municipio']].copy()
+_mapa_busca_data['nome_lower'] = _mapa_busca_data['nome_municipio'].str.lower()
+mapa_cod7_por_nome = _mapa_busca_data.set_index('nome_lower')['cod7'].to_dict()
+# z base sem destaque
+mapa_z_base = list(_z_values)
+
+del _pivot, _ids_com_dados, _z_values, _hover_dict, _customdata, df_mapa_raw, _mapa_busca_data
 print("[DASH] Mapa pronto.", flush=True)
 
 # ── Cores ─────────────────────────────────────────────────────────────────────
@@ -302,6 +311,18 @@ app.layout = html.Div(
                 _card([
                     _titulo("Mapa de Casos por Município — Todas as Doenças (2007–2025)"),
 
+                    html.Div([
+                        html.Label("Buscar município", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
+                        dcc.Input(
+                            id="mapa-busca-municipio",
+                            type="text",
+                            placeholder="Digite o nome do município para destacar...",
+                            debounce=True,
+                            style={"width": "320px", "fontSize": 13, "padding": "6px 12px",
+                                   "border": "1px solid #e2e8f0", "borderRadius": 6, "marginLeft": 8},
+                        ),
+                    ], style={"marginTop": 12, "marginBottom": 8, "display": "flex", "alignItems": "center"}),
+
                     dcc.Graph(id="mapa-municipios",
                               figure=fig_mapa,
                               config={"displayModeBar": "hover", "scrollZoom": True,
@@ -385,6 +406,42 @@ app.layout = html.Div(
         ]),
     ]
 )
+
+
+# ── Callback: Busca de município no mapa (destaque via Patch) ─────────────────
+@app.callback(
+    Output("mapa-municipios", "figure"),
+    Input("mapa-busca-municipio", "value"),
+)
+def destacar_municipio_mapa(busca):
+    patched = Patch()
+    if not busca or not busca.strip():
+        # Sem busca: volta ao z base (azul claro para com dados, cinza para sem)
+        patched["data"][0]["z"] = mapa_z_base
+        patched["data"][0]["colorscale"] = [[0, "#F8FAFB"], [0.4999, "#F8FAFB"], [0.5, "#DCECF5"], [1, "#DCECF5"]]
+        patched["data"][0]["zmax"] = 1
+        return patched
+
+    termo = busca.strip().lower()
+    # Encontrar cod7s que batem com a busca
+    cod7s_match = {cod7 for nome, cod7 in mapa_cod7_por_nome.items() if termo in nome}
+
+    if not cod7s_match:
+        patched["data"][0]["z"] = mapa_z_base
+        patched["data"][0]["colorscale"] = [[0, "#F8FAFB"], [0.4999, "#F8FAFB"], [0.5, "#DCECF5"], [1, "#DCECF5"]]
+        patched["data"][0]["zmax"] = 1
+        return patched
+
+    # z: 0=sem dados, 1=com dados, 2=destaque (município encontrado)
+    z_destaque = [2 if loc in cod7s_match else mapa_z_base[i] for i, loc in enumerate(geojson_ids)]
+    patched["data"][0]["z"] = z_destaque
+    patched["data"][0]["zmax"] = 2
+    patched["data"][0]["colorscale"] = [
+        [0, "#F8FAFB"], [0.24, "#F8FAFB"],
+        [0.25, "#DCECF5"], [0.49, "#DCECF5"],
+        [0.5, "#E53E3E"], [1.0, "#E53E3E"],
+    ]
+    return patched
 
 
 # ── Callback: UF cascateia com região ────────────────────────────────────────
