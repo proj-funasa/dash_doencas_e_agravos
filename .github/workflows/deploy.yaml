@@ -50,4 +50,4 @@ jobs:
         aws eks update-kubeconfig --name dataiesb-cluster --region $AWS_REGION
         kubectl apply -f k8s/deployment.yaml
         kubectl set image deployment/$DEPLOYMENT -n $NAMESPACE $DEPLOYMENT=$ECR_REPO:${{ github.sha }}
-        kubectl rollout status deployment/$DEPLOYMENT -n $NAMESPACE --timeout=120s
+        kubectl rollout status deployment/$DEPLOYMENT -n $NAMESPACE --timeout=300s

@@ -24,21 +24,22 @@ spec:
             httpGet:
               path: /doencas-agravos/
               port: 8050
-            initialDelaySeconds: 30
+            initialDelaySeconds: 90
             periodSeconds: 30
           readinessProbe:
             httpGet:
               path: /doencas-agravos/
               port: 8050
-            initialDelaySeconds: 20
+            initialDelaySeconds: 60
             periodSeconds: 10
+            failureThreshold: 6
           resources:
             requests:
-              cpu: 100m
-              memory: 256Mi
-            limits:
-              cpu: 500m
+              cpu: 200m
               memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1536Mi
 ---
 apiVersion: v1
 kind: Service

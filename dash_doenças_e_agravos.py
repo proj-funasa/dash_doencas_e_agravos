@@ -106,12 +106,16 @@ print(f"[DASH] Pronto — {len(df_mun)} registros carregados. Subindo servidor..
 # ── GeoJSON dos municípios (simplificado) ─────────────────────────────────────
 print("[DASH] Carregando GeoJSON de municípios...", flush=True)
 GEOJSON_URL = "https://raw.githubusercontent.com/tbrugz/geodata-br/master/geojson/geojs-100-mun.json"
-geojson_municipios = requests.get(GEOJSON_URL).json()
-# Padronizar código do município para 6 dígitos (sem dígito verificador)
-for feat in geojson_municipios["features"]:
-    cod = str(feat["properties"].get("id", "")).strip()
-    feat["properties"]["id"] = cod[:6] if len(cod) >= 6 else cod
-print(f"[DASH] GeoJSON carregado — {len(geojson_municipios['features'])} municípios", flush=True)
+try:
+    geojson_municipios = requests.get(GEOJSON_URL, timeout=60).json()
+    # Padronizar código do município para 6 dígitos (sem dígito verificador)
+    for feat in geojson_municipios["features"]:
+        cod = str(feat["properties"].get("id", "")).strip()
+        feat["properties"]["id"] = cod[:6] if len(cod) >= 6 else cod
+    print(f"[DASH] GeoJSON carregado — {len(geojson_municipios['features'])} municípios", flush=True)
+except Exception as e:
+    print(f"[DASH] ERRO ao carregar GeoJSON: {e}. Mapa ficará indisponível.", flush=True)
+    geojson_municipios = {"type": "FeatureCollection", "features": []}
 
 # ── Cores ─────────────────────────────────────────────────────────────────────
 COR_HEADER = "#1B3A5C"
