@@ -119,7 +119,7 @@ try:
     df_coords = df_coords[['cod6', 'latitude', 'longitude']].drop_duplicates(subset='cod6')
     print(f"[DASH] Coordenadas carregadas — {len(df_coords)} municípios", flush=True)
 except Exception as e:
-    print(f"[DASH] ERRO ao carregar coordenadas: {e}", flush=True)
+    print(f"[DASH] AVISO: coordenadas indisponíveis ({e}). Mapa será omitido.", flush=True)
     df_coords = pd.DataFrame(columns=['cod6', 'latitude', 'longitude'])
 
 # Agregar total de casos por município (todas as doenças, todo o período)
@@ -130,27 +130,35 @@ _df_mapa['cod6'] = _df_mapa['codigo_municipio'].astype(str).str.strip()
 _df_mapa = _df_mapa.merge(df_coords, on='cod6', how='inner')
 _df_mapa = _df_mapa[_df_mapa['total_casos'] > 0].copy()
 
-fig_mapa = px.density_mapbox(
-    _df_mapa,
-    lat="latitude",
-    lon="longitude",
-    z="total_casos",
-    radius=12,
-    zoom=3.3,
-    center={"lat": -14.2, "lon": -51.9},
-    mapbox_style="carto-positron",
-    color_continuous_scale="YlOrRd",
-    hover_name="nome_municipio",
-    hover_data={"latitude": False, "longitude": False, "uf": True, "total_casos": ":,.0f", "cod6": False},
-    labels={"total_casos": "Total de Casos", "uf": "UF"},
-)
-fig_mapa.update_layout(
-    margin=dict(l=0, r=0, t=0, b=0),
-    height=580,
-    coloraxis_colorbar=dict(title="Casos", thickness=15, len=0.6),
-)
+if not _df_mapa.empty:
+    fig_mapa = px.density_mapbox(
+        _df_mapa,
+        lat="latitude",
+        lon="longitude",
+        z="total_casos",
+        radius=12,
+        zoom=3.3,
+        center={"lat": -14.2, "lon": -51.9},
+        mapbox_style="carto-positron",
+        color_continuous_scale="YlOrRd",
+        hover_name="nome_municipio",
+        hover_data={"latitude": False, "longitude": False, "uf": True, "total_casos": ":,.0f", "cod6": False},
+        labels={"total_casos": "Total de Casos", "uf": "UF"},
+    )
+    fig_mapa.update_layout(
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=580,
+        coloraxis_colorbar=dict(title="Casos", thickness=15, len=0.6),
+    )
+    MAPA_DISPONIVEL = True
+else:
+    fig_mapa = go.Figure()
+    fig_mapa.update_layout(height=200, annotations=[{"text": "Mapa indisponível", "showarrow": False,
+                           "font": {"size": 14, "color": "#9ca3af"}}])
+    MAPA_DISPONIVEL = False
+
 del _df_mapa
-print("[DASH] Mapa de calor pronto.", flush=True)
+print(f"[DASH] Mapa {'pronto' if MAPA_DISPONIVEL else 'indisponível'}.", flush=True)
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app    = dash.Dash(__name__, title="Doenças e Agravos — SINAN", suppress_callback_exceptions=True,
