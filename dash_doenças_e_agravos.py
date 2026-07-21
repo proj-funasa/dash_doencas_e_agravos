@@ -1,23 +1,33 @@
 import os
+import json
 import requests
 import dash
 from dash import dcc, html, Input, Output, Patch
 import pandas as pd
 import plotly.graph_objects as go
 import trino
+from trino.auth import BasicAuthentication
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 TRINO_HOST = os.getenv("TRINO_HOST", "trino.trino.svc.cluster.local")
 TRINO_PORT = int(os.getenv("TRINO_PORT", "8080"))
 TRINO_USER = os.getenv("TRINO_USER", "funasa_reader")
+TRINO_PASSWORD = os.getenv("TRINO_PASSWORD", "")
 
 # ── Conexão Trino (interna k8s) ──────────────────────────────────────────────
 def query(sql):
     """Abre conexão, executa query, retorna DataFrame e fecha."""
-    conn = trino.dbapi.connect(
-        host=TRINO_HOST,
-        port=TRINO_PORT,
-        user=TRINO_USER,
-    )
+    kwargs = dict(host=TRINO_HOST, port=TRINO_PORT, user=TRINO_USER)
+    if TRINO_PASSWORD:
+        kwargs["http_scheme"] = "https"
+        kwargs["auth"] = BasicAuthentication(TRINO_USER, TRINO_PASSWORD)
+        kwargs["verify"] = False
+    conn = trino.dbapi.connect(**kwargs)
     cur = conn.cursor()
     cur.execute(sql)
     rows = cur.fetchall()
@@ -178,8 +188,15 @@ fig_mapa.add_trace(go.Choroplethmap(
     locations=geojson_ids,
     z=_z_values,
     featureidkey="properties.codarea",
-    zmin=0, zmax=1,
-    colorscale=[[0, "#F8FAFB"], [0.4999, "#F8FAFB"], [0.5, "#DCECF5"], [1, "#DCECF5"]],
+    zmin=0, zmax=2,
+    colorscale=[
+        [0.0, "#F8FAFB"],
+        [0.25, "#F8FAFB"],
+        [0.26, "#DCECF5"],
+        [0.74, "#DCECF5"],
+        [0.75, "#E53E3E"],
+        [1.0, "#E53E3E"],
+    ],
     marker_opacity=0.95,
     marker_line_color="#8FA3B3",
     marker_line_width=0.5,
@@ -197,10 +214,12 @@ fig_mapa.update_layout(
     uirevision="mapa-doencas",
 )
 
-# Guardar dados para callback de busca (cod7 -> nome para lookup)
+# Guardar dados para callback de busca (nome_lower -> lista de cod7s)
 _mapa_busca_data = _pivot[['cod7', 'nome_municipio']].copy()
 _mapa_busca_data['nome_lower'] = _mapa_busca_data['nome_municipio'].str.lower()
-mapa_cod7_por_nome = _mapa_busca_data.set_index('nome_lower')['cod7'].to_dict()
+mapa_cod7_por_nome = {}
+for _, r in _mapa_busca_data.iterrows():
+    mapa_cod7_por_nome.setdefault(r['nome_lower'], []).append(r['cod7'])
 # z base sem destaque
 mapa_z_base = list(_z_values)
 
@@ -416,31 +435,25 @@ app.layout = html.Div(
 def destacar_municipio_mapa(busca):
     patched = Patch()
     if not busca or not busca.strip():
-        # Sem busca: volta ao z base (azul claro para com dados, cinza para sem)
+        # Sem busca: volta ao z base
         patched["data"][0]["z"] = mapa_z_base
-        patched["data"][0]["colorscale"] = [[0, "#F8FAFB"], [0.4999, "#F8FAFB"], [0.5, "#DCECF5"], [1, "#DCECF5"]]
-        patched["data"][0]["zmax"] = 1
         return patched
 
     termo = busca.strip().lower()
     # Encontrar cod7s que batem com a busca
-    cod7s_match = {cod7 for nome, cod7 in mapa_cod7_por_nome.items() if termo in nome}
+    cod7s_match = set()
+    for nome, cod7_list in mapa_cod7_por_nome.items():
+        if termo in nome:
+            cod7s_match.update(cod7_list)
 
     if not cod7s_match:
+        # Nenhum resultado: mantém base
         patched["data"][0]["z"] = mapa_z_base
-        patched["data"][0]["colorscale"] = [[0, "#F8FAFB"], [0.4999, "#F8FAFB"], [0.5, "#DCECF5"], [1, "#DCECF5"]]
-        patched["data"][0]["zmax"] = 1
         return patched
 
     # z: 0=sem dados, 1=com dados, 2=destaque (município encontrado)
     z_destaque = [2 if loc in cod7s_match else mapa_z_base[i] for i, loc in enumerate(geojson_ids)]
     patched["data"][0]["z"] = z_destaque
-    patched["data"][0]["zmax"] = 2
-    patched["data"][0]["colorscale"] = [
-        [0, "#F8FAFB"], [0.24, "#F8FAFB"],
-        [0.25, "#DCECF5"], [0.49, "#DCECF5"],
-        [0.5, "#E53E3E"], [1.0, "#E53E3E"],
-    ]
     return patched
 
 
