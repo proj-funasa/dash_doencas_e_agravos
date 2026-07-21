@@ -3,3 +3,4 @@ pandas
 plotly
 trino
 gunicorn
+requests

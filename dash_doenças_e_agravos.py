@@ -1,8 +1,11 @@
 import os
+import json
+import requests
 import dash
 from dash import dcc, html, Input, Output
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.express as px
 import trino
 
 TRINO_HOST = os.getenv("TRINO_HOST", "trino.trino.svc.cluster.local")
@@ -99,6 +102,16 @@ df_mun['uf']               = df_mun['codigo_municipio'].str[:2].map(UF_POR_CODIG
 df_mun['regiao']           = df_mun['uf'].map(REGIAO_POR_UF)
 
 print(f"[DASH] Pronto — {len(df_mun)} registros carregados. Subindo servidor...", flush=True)
+
+# ── GeoJSON dos municípios (simplificado) ─────────────────────────────────────
+print("[DASH] Carregando GeoJSON de municípios...", flush=True)
+GEOJSON_URL = "https://raw.githubusercontent.com/tbrugz/geodata-br/master/geojson/geojs-100-mun.json"
+geojson_municipios = requests.get(GEOJSON_URL).json()
+# Padronizar código do município para 6 dígitos (sem dígito verificador)
+for feat in geojson_municipios["features"]:
+    cod = str(feat["properties"].get("id", "")).strip()
+    feat["properties"]["id"] = cod[:6] if len(cod) >= 6 else cod
+print(f"[DASH] GeoJSON carregado — {len(geojson_municipios['features'])} municípios", flush=True)
 
 # ── Cores ─────────────────────────────────────────────────────────────────────
 COR_HEADER = "#1B3A5C"
@@ -199,6 +212,51 @@ app.layout = html.Div(
                 dcc.Graph(figure=fig_barras, config={"displayModeBar": False}),
             ]),
 
+            # ── Mapa Coroplético por Município ────────────────────────────────
+            html.Div(style={"marginTop": 24}, children=[
+                _card([
+                    _titulo("Mapa de Casos por Município"),
+
+                    # Filtros do mapa
+                    html.Div([
+                        html.Div([
+                            html.Label("Doença", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
+                            dcc.Dropdown(
+                                id="mapa-filtro-doenca",
+                                options=[{"label": nomes_exibicao[d], "value": d} for d in doencas],
+                                value="dengue", clearable=False,
+                                style={"width": "180px", "fontSize": 13},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("Ano", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
+                            dcc.Dropdown(
+                                id="mapa-filtro-ano",
+                                options=[{"label": "Todos", "value": "Todos"}] +
+                                        [{"label": a, "value": a} for a in anos],
+                                value="Todos", clearable=False,
+                                style={"width": "120px", "fontSize": 13},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("Mês", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
+                            dcc.Dropdown(
+                                id="mapa-filtro-mes",
+                                options=[{"label": "Todos", "value": "Todos"}] +
+                                        [{"label": NOME_MES[m], "value": m} for m in meses],
+                                value="Todos", clearable=False,
+                                style={"width": "140px", "fontSize": 13},
+                            ),
+                        ]),
+                    ], style={"display": "flex", "gap": 16, "marginTop": 16, "marginBottom": 16, "flexWrap": "wrap"}),
+
+                    dcc.Loading(
+                        dcc.Graph(id="mapa-municipios", config={"displayModeBar": False}),
+                        type="circle",
+                    ),
+                ]),
+            ]),
+
             # ── Análise por Município ─────────────────────────────────────────
             html.Div(style={"marginTop": 24}, children=[
                 _card([
@@ -288,6 +346,65 @@ def atualizar_opcoes_uf(regiao_sel):
     else:
         lista = sorted(UF_POR_REGIAO.get(regiao_sel, []))
     return [{"label": "Todas", "value": "Todos"}] + [{"label": u, "value": u} for u in lista], "Todos"
+
+
+# ── Callback: Mapa coroplético por município ─────────────────────────────────
+@app.callback(
+    Output("mapa-municipios", "figure"),
+    Input("mapa-filtro-doenca", "value"),
+    Input("mapa-filtro-ano", "value"),
+    Input("mapa-filtro-mes", "value"),
+)
+def atualizar_mapa(doenca_sel, ano_sel, mes_sel):
+    df = df_mun[df_mun['doenca'] == doenca_sel].copy()
+
+    if ano_sel != "Todos":
+        df = df[df['ano'] == ano_sel]
+    if mes_sel != "Todos":
+        df = df[df['mes'] == mes_sel]
+
+    # Agregar por município (código com 6 dígitos)
+    df['cod6'] = df['codigo_municipio'].str[:6]
+    df_agg = df.groupby(['cod6', 'nome_municipio', 'uf'], as_index=False)['casos_mes'].sum()
+    df_agg = df_agg.rename(columns={'casos_mes': 'total_casos'})
+    df_agg = df_agg[df_agg['total_casos'] > 0]
+
+    if df_agg.empty:
+        fig_vazio = go.Figure()
+        fig_vazio.update_layout(
+            plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+            xaxis={"visible": False}, yaxis={"visible": False},
+            annotations=[{"text": "Nenhum dado encontrado para os filtros selecionados",
+                          "showarrow": False, "font": {"size": 14, "color": "#9ca3af"}}],
+            height=500,
+        )
+        return fig_vazio
+
+    fig = px.choropleth_mapbox(
+        df_agg,
+        geojson=geojson_municipios,
+        locations="cod6",
+        featureidkey="properties.id",
+        color="total_casos",
+        color_continuous_scale="YlOrRd",
+        hover_name="nome_municipio",
+        hover_data={"cod6": False, "uf": True, "total_casos": ":,.0f"},
+        labels={"total_casos": "Casos", "uf": "UF"},
+        mapbox_style="carto-positron",
+        center={"lat": -14.2, "lon": -51.9},
+        zoom=3.5,
+        opacity=0.7,
+    )
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=550,
+        coloraxis_colorbar=dict(
+            title="Casos",
+            thickness=15,
+            len=0.7,
+        ),
+    )
+    return fig
 
 
 # ── Callback: Gráfico + Tabela — filtra em memória ───────────────────────────
