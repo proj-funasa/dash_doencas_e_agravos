@@ -549,7 +549,7 @@ def atualizar_municipios(doenca_sel, regiao_sel, uf_sel, ano_sel, mes_sel):
     info = f"Exibindo {min(50, total)} de {total} município(s) · ordenado por total de casos"
     return grafico, tabela, info
 
-# ── Callback: Clique no mapa → gráfico de evolução (Finalizado) ───────────────
+# ── Callback: Clique no mapa → gráfico de evolução ────────────────────────────
 @app.callback(
     Output("grafico-clique-municipio-container", "children"),
     Input("mapa-municipios", "clickData"),
@@ -559,58 +559,165 @@ def atualizar_municipios(doenca_sel, regiao_sel, uf_sel, ano_sel, mes_sel):
 )
 def grafico_clique_municipio(click_data, doencas_sel, ano_inicio, ano_fim):
     if not click_data:
-        return html.P("Clique em um município no mapa para ver a evolução por doença.",
-                      style={"fontSize": 13, "color": "#718096", "fontStyle": "italic", "padding": "20px"})
+        return html.P(
+            "Clique em um município no mapa para ver a evolução por doença.",
+            style={
+                "fontSize": 13,
+                "color": "#718096",
+                "fontStyle": "italic",
+                "padding": "20px",
+            },
+        )
 
     try:
         point = click_data["points"][0]
         idx = point.get("pointIndex", point.get("pointNumber", None))
         if idx is None:
-            return html.P("Não foi possível identificar o município.", style={"fontSize": 13, "color": "#C53030"})
+            return html.P(
+                "Não foi possível identificar o município.",
+                style={"fontSize": 13, "color": "#C53030"},
+            )
+
         cod7 = geojson_ids[idx]
         cod6 = cod7[:6]
+
     except (KeyError, IndexError, TypeError):
-        return html.P("Não foi possível identificar o município.", style={"fontSize": 13, "color": "#C53030"})
+        return html.P(
+            "Não foi possível identificar o município.",
+            style={"fontSize": 13, "color": "#C53030"},
+        )
 
-    df_m = df_mun[df_mun['codigo_municipio'] == cod6].copy()
+    # Dados do município
+    df_m = df_mun[df_mun["codigo_municipio"] == cod6].copy()
+
     if df_m.empty:
-        return html.P("Sem dados para o município selecionado.", style={"fontSize": 13, "color": "#718096"})
+        return html.P(
+            "Sem dados para o município selecionado.",
+            style={"fontSize": 13, "color": "#718096"},
+        )
 
-    nome_m = df_m['nome_municipio'].iloc[0]
-    uf_m = df_m['uf'].iloc[0]
+    nome_m = df_m["nome_municipio"].iloc[0]
+    uf_m = df_m["uf"].iloc[0]
 
+    # Filtro de doenças
     if doencas_sel and len(doencas_sel) > 0:
-        df_m = df_m[df_m['doenca'].isin(doencas_sel)]
+        df_m = df_m[df_m["doenca"].isin(doencas_sel)]
+
+    # Filtro de período
     if ano_inicio and ano_fim:
         a_ini = str(min(int(ano_inicio), int(ano_fim)))
         a_fim = str(max(int(ano_inicio), int(ano_fim)))
-        df_m = df_m[(df_m['ano'] >= a_ini) & (df_m['ano'] <= a_fim)]
+        df_m = df_m[(df_m["ano"] >= a_ini) & (df_m["ano"] <= a_fim)]
 
-    df_m_agg = df_m.groupby(['ano', 'doenca'], as_index=False)['casos_mes'].sum()
+    if df_m.empty:
+        return html.P(
+            "Sem dados para o período selecionado.",
+            style={"fontSize": 13, "color": "#718096"},
+        )
 
+    # ============================================================
+    # SE O ANO INICIAL E FINAL FOREM IGUAIS -> MOSTRA POR MÊS
+    # ============================================================
+    if ano_inicio == ano_fim:
+
+        df_m_agg = (
+            df_m.groupby(["mes", "doenca"], as_index=False)["casos_mes"]
+            .sum()
+        )
+
+        df_m_agg["mes"] = pd.Categorical(
+            df_m_agg["mes"],
+            categories=meses,
+            ordered=True,
+        )
+
+        df_m_agg = df_m_agg.sort_values("mes")
+
+        eixo = "mes"
+        titulo_x = "Mês"
+
+        tickvals = meses
+        ticktext = [NOME_MES[m] for m in meses]
+
+    # ============================================================
+    # CASO CONTRÁRIO -> MOSTRA POR ANO
+    # ============================================================
+    else:
+
+        df_m_agg = (
+            df_m.groupby(["ano", "doenca"], as_index=False)["casos_mes"]
+            .sum()
+        ).sort_values("ano")
+
+        eixo = "ano"
+        titulo_x = "Ano"
+
+        tickvals = None
+        ticktext = None
+
+    # Criação do gráfico
     fig_evo = go.Figure()
-    for d in df_m_agg['doenca'].unique():
-        sub = df_m_agg[df_m_agg['doenca'] == d].sort_values('ano')
-        fig_evo.add_trace(go.Scatter(
-            x=sub['ano'], y=sub['casos_mes'],
-            mode='lines+markers', name=nomes_exibicao.get(d, d),
-            line=dict(color=COR_POR_DOENCA.get(d, "#333"), width=2),
-            marker=dict(size=6)
-        ))
+
+    for d in sorted(df_m_agg["doenca"].unique()):
+
+        sub = df_m_agg[df_m_agg["doenca"] == d]
+
+        fig_evo.add_trace(
+            go.Scatter(
+                x=sub[eixo],
+                y=sub["casos_mes"],
+                mode="lines+markers",
+                name=nomes_exibicao.get(d, d),
+                line=dict(
+                    color=COR_POR_DOENCA.get(d, "#333"),
+                    width=2,
+                ),
+                marker=dict(size=7),
+            )
+        )
 
     fig_evo.update_layout(
         margin=dict(l=10, r=10, t=30, b=40),
-        plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
-        font=dict(family="Inter, sans-serif", size=12, color="#333"),
-        xaxis=dict(title="Ano", showgrid=True, gridcolor="#f0f0f0"),
-        yaxis=dict(title="Casos", showgrid=True, gridcolor="#f0f0f0"),
-        height=320,
+        plot_bgcolor="#ffffff",
+        paper_bgcolor="#ffffff",
+        font=dict(
+            family="Inter, sans-serif",
+            size=12,
+            color="#333",
+        ),
+        xaxis=dict(
+            title=titulo_x,
+            showgrid=True,
+            gridcolor="#f0f0f0",
+            tickmode="array" if eixo == "mes" else None,
+            tickvals=tickvals,
+            ticktext=ticktext,
+        ),
+        yaxis=dict(
+            title="Casos",
+            showgrid=True,
+            gridcolor="#f0f0f0",
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0,
+        ),
+        height=340,
     )
 
-    return _card([
-        _titulo(f"Evolução Temporal dos Casos — {nome_m} ({uf_m})"),
-        dcc.Graph(figure=fig_evo, config={"displayModeBar": False})
-    ])
-
+    return _card(
+        [
+            _titulo(
+                f"Evolução Temporal dos Casos — {nome_m} ({uf_m})"
+            ),
+            dcc.Graph(
+                figure=fig_evo,
+                config={"displayModeBar": False},
+            ),
+        ]
+    )
 if __name__ == "__main__":
     app.run_server(host="0.0.0.0", port=8050, debug=True)
