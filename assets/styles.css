@@ -110,6 +110,29 @@
         width: 100% !important;
     }
 
+    /* Filtros do mapa: empilha verticalmente */
+    #mapa-filtros-container {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        gap: 10px !important;
+    }
+
+    #mapa-filtros-container > div {
+        width: 100% !important;
+    }
+
+    #mapa-filtros-container .dash-dropdown {
+        width: 100% !important;
+    }
+
+    #mapa-filtros-container input {
+        width: 100% !important;
+    }
+
+    #mapa-filtros-container label {
+        font-size: 10px !important;
+    }
+
     /* Gráfico + Tabela: empilha verticalmente */
     #grafico-tabela-container {
         flex-direction: column !important;

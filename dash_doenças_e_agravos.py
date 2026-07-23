@@ -165,7 +165,17 @@ _pivot['cod7'] = _pivot['codigo_municipio'].map(cod6_to_cod7)
 _pivot = _pivot.dropna(subset=['cod7'])
 _ids_com_dados = set(_pivot['cod7'].tolist())
 
-_z_values = [1 if loc in _ids_com_dados else 0 for loc in geojson_ids]
+# z proporcional ao total de casos (log scale) para gradiente de cor
+_max_casos = _pivot['total_geral'].max() if not _pivot.empty else 1
+_z_values = []
+_cod7_to_total = dict(zip(_pivot['cod7'], _pivot['total_geral']))
+for loc in geojson_ids:
+    total = _cod7_to_total.get(loc, 0)
+    if total > 0:
+        ratio = math.log1p(total) / math.log1p(_max_casos)
+        _z_values.append(0.11 + ratio * 0.79)
+    else:
+        _z_values.append(0)
 
 _hover_dict = {}
 for _, row in _pivot.iterrows():
