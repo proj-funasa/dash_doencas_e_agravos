@@ -198,12 +198,26 @@ def criar_figura_mapa(z_vals, custom_data):
         showscale=False,
     ))
     fig.update_layout(
-        map_style="carto-positron", map_center={"lat": -14.2, "lon": -51.9}, map_zoom=3.3,
-        margin=dict(l=0, r=0, t=0, b=0), height=580, paper_bgcolor="#E8F0F3", plot_bgcolor="#E8F0F3",
-        dragmode="pan", hovermode="closest",
-        hoverlabel=dict(bgcolor="#ffffff", bordercolor="#e2e8f0", font=dict(family="Inter, sans-serif", size=12, color="#2d3748")),
-        uirevision="mapa-doencas",
-    )
+    map_style="white-bg",   # remove o mapa do mundo
+    map_center={"lat": -14.2, "lon": -51.9},
+    map_zoom=3.3,
+    margin=dict(l=0, r=0, t=0, b=0),
+    height=580,
+    paper_bgcolor="#E8F0F3",
+    plot_bgcolor="#E8F0F3",
+    dragmode="pan",
+    hovermode="closest",
+    hoverlabel=dict(
+        bgcolor="#ffffff",
+        bordercolor="#e2e8f0",
+        font=dict(
+            family="Inter, sans-serif",
+            size=12,
+            color="#2d3748"
+        )
+    ),
+    uirevision="mapa-doencas",
+)
     return fig
 
 fig_mapa = criar_figura_mapa(_z_values, _customdata)
