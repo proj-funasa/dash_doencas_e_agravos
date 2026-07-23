@@ -549,12 +549,45 @@ def atualizar_mapa(doencas_sel, ano_inicio, ano_fim, busca):
         else:
             customdata_novo.append("")
 
-    patched = Patch()
-    patched["data"][0]["z"] = z_novo
-    patched["data"][0]["customdata"] = customdata_novo
-    return patched
+    # Retornar figure completa (Patch causa bug "source already exists" com Choroplethmap)
+    fig_novo = go.Figure()
+    fig_novo.add_trace(go.Choroplethmap(
+        geojson=geojson_municipios,
+        locations=geojson_ids,
+        z=z_novo,
+        featureidkey="properties.codarea",
+        zmin=0, zmax=1,
+        colorscale=[
+            [0.0, "#F8FAFB"],
+            [0.1, "#F8FAFB"],
+            [0.11, "#BEE3F8"],
+            [0.3, "#63B3ED"],
+            [0.5, "#3182CE"],
+            [0.7, "#2B6CB0"],
+            [0.9, "#1A365D"],
+            [0.91, "#C53030"],
+            [1.0, "#C53030"],
+        ],
+        marker_opacity=0.95,
+        marker_line_color="#8FA3B3",
+        marker_line_width=0.5,
+        customdata=customdata_novo,
+        hovertemplate="%{customdata}<extra></extra>",
+        showscale=False,
+    ))
+    fig_novo.update_layout(
+        map=dict(style=FUNASA_MAP_STYLE, center={"lat": -14.2, "lon": -51.9}, zoom=3.3),
+        margin=dict(l=0, r=0, t=0, b=0), height=580,
+        paper_bgcolor="#E8F0F3", plot_bgcolor="#E8F0F3",
+        dragmode="pan", hovermode="closest",
+        hoverlabel=dict(bgcolor="#ffffff", bordercolor="#e2e8f0",
+                        font=dict(family="Inter, sans-serif", size=12, color="#2d3748")),
+        uirevision="mapa-doencas",
+    )
+    return fig_novo
 
 
+# ── Callback: UF cascateia com região
 # ── Callback: UF cascateia com região ────────────────────────────────────────
 @app.callback(
     Output("filtro-uf", "options"),
