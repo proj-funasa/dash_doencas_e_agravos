@@ -618,7 +618,7 @@ def grafico_clique_municipio(click_data, doencas_sel, ano_inicio, ano_fim):
     # ============================================================
     # SE O ANO INICIAL E FINAL FOREM IGUAIS -> MOSTRA POR MÊS
     # ============================================================
-    if ano_inicio == ano_fim:
+    if int(ano_inicio) == int(ano_fim):
 
         df_m_agg = (
             df_m.groupby(["mes", "doenca"], as_index=False)["casos_mes"]
@@ -692,6 +692,8 @@ def grafico_clique_municipio(click_data, doencas_sel, ano_inicio, ano_fim):
             tickmode="array" if eixo == "mes" else None,
             tickvals=tickvals,
             ticktext=ticktext,
+            categoryorder="array",
+            categoryarray=ticktext if eixo == "mes" else None,
         ),
         yaxis=dict(
             title="Casos",
