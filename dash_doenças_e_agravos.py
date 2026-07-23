@@ -4,7 +4,7 @@ import math
 import requests
 import uuid
 import dash
-from dash import dcc, html, Input, Output
+from dash import dcc, html, Input, Output, Patch
 import pandas as pd
 import plotly.graph_objects as go
 import trino
@@ -451,7 +451,14 @@ def atualizar_mapa(doencas_sel, ano_inicio, ano_fim, busca):
         else:
             customdata_novo.append("")
 
-    return criar_figura_mapa(z_novo, customdata_novo)
+    # Em vez de devolver um go.Figure novo (o que força o Plotly a destruir e
+    # recriar o mapa MapLibre inteiro — origem do erro "Source ... already
+    # exists" quando dois updates se sobrepõem), usamos Patch() para só
+    # atualizar os dados do trace existente, mantendo o mapa "vivo".
+    fig_patch = Patch()
+    fig_patch["data"][0]["z"] = z_novo
+    fig_patch["data"][0]["customdata"] = customdata_novo
+    return fig_patch
 
 # ── Callback: UF Cascata ──────────────────────────────────────────────────────
 @app.callback(
