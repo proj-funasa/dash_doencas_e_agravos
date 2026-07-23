@@ -10,4 +10,4 @@ COPY . .
 
 EXPOSE 8050
 HEALTHCHECK CMD curl --fail http://localhost:8050/doencas-agravos/ || exit 1
-CMD ["gunicorn", "--workers", "3", "--threads", "2", "--timeout", "120", "--bind", "0.0.0.0:8050", "app:server"]
+CMD ["gunicorn", "--workers", "3", "--threads", "2", "--timeout", "120", "--preload", "--bind", "0.0.0.0:8050", "app:server"]
