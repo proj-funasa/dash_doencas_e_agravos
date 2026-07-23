@@ -10,4 +10,5 @@ COPY . .
 
 EXPOSE 8050
 HEALTHCHECK CMD curl --fail http://localhost:8050/doencas-agravos/ || exit 1
-CMD ["gunicorn", "app:server", "-b", "0.0.0.0:8050", "--workers", "1", "--timeout", "300"]
+# Exemplo de linha final do seu Dockerfile:
+CMD ["gunicorn", "--workers", "3", "--threads", "2", "--timeout", "120", "--bind", "0.0.0.0:8050", "dash_doencas_e_agravos:server"]
