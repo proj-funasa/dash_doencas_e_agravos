@@ -1,6 +1,7 @@
-dash
-pandas
-plotly
-trino
-gunicorn
-requests
+dash==2.17.1
+pandas==2.2.2
+plotly==5.22.0
+trino==0.328.0
+gunicorn==22.0.0
+requests==2.32.3
+python-dotenv==1.0.1

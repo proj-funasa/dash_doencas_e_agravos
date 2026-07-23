@@ -194,7 +194,7 @@ FUNASA_MAP_STYLE = {
 }
 
 fig_mapa = go.Figure()
-fig_mapa.add_trace(go.Choroplethmap(
+fig_mapa.add_trace(go.Choroplethmapbox(
     geojson=geojson_municipios,
     locations=geojson_ids,
     z=_z_values,
@@ -219,7 +219,7 @@ fig_mapa.add_trace(go.Choroplethmap(
     showscale=False,
 ))
 fig_mapa.update_layout(
-    map=dict(style=FUNASA_MAP_STYLE, center={"lat": -14.2, "lon": -51.9}, zoom=3.3),
+    mapbox=dict(style=FUNASA_MAP_STYLE, center={"lat": -14.2, "lon": -51.9}, zoom=3.3),
     margin=dict(l=0, r=0, t=0, b=0), height=580,
     paper_bgcolor="#E8F0F3", plot_bgcolor="#E8F0F3",
     dragmode="pan", hovermode="closest",
