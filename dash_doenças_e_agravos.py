@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import requests
 import dash
 from dash import dcc, html, Input, Output, Patch
@@ -188,14 +189,17 @@ fig_mapa.add_trace(go.Choroplethmap(
     locations=geojson_ids,
     z=_z_values,
     featureidkey="properties.codarea",
-    zmin=0, zmax=2,
+    zmin=0, zmax=1,
     colorscale=[
         [0.0, "#F8FAFB"],
-        [0.25, "#F8FAFB"],
-        [0.26, "#DCECF5"],
-        [0.74, "#DCECF5"],
-        [0.75, "#E53E3E"],
-        [1.0, "#E53E3E"],
+        [0.1, "#F8FAFB"],
+        [0.11, "#BEE3F8"],
+        [0.3, "#63B3ED"],
+        [0.5, "#3182CE"],
+        [0.7, "#2B6CB0"],
+        [0.9, "#1A365D"],
+        [0.91, "#C53030"],
+        [1.0, "#C53030"],
     ],
     marker_opacity=0.95,
     marker_line_color="#8FA3B3",
@@ -328,19 +332,52 @@ app.layout = html.Div(
             # ── Mapa por Município ─────────────────────────────────────────────
             html.Div(style={"marginTop": 24}, children=[
                 _card([
-                    _titulo("Mapa de Casos por Município — Todas as Doenças (2007–2025)"),
+                    _titulo("Mapa de Casos por Município"),
 
+                    # Filtros do mapa
                     html.Div([
-                        html.Label("Buscar município", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
-                        dcc.Input(
-                            id="mapa-busca-municipio",
-                            type="text",
-                            placeholder="Digite o nome do município para destacar...",
-                            debounce=True,
-                            style={"width": "320px", "fontSize": 13, "padding": "6px 12px",
-                                   "border": "1px solid #e2e8f0", "borderRadius": 6, "marginLeft": 8},
-                        ),
-                    ], style={"marginTop": 12, "marginBottom": 8, "display": "flex", "alignItems": "center"}),
+                        html.Div([
+                            html.Label("Doenças", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
+                            dcc.Dropdown(
+                                id="mapa-filtro-doenca",
+                                options=[{"label": nomes_exibicao[d], "value": d} for d in doencas],
+                                value=[],
+                                multi=True,
+                                placeholder="Todas as doenças",
+                                style={"width": "320px", "fontSize": 13},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("Ano Início", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
+                            dcc.Dropdown(
+                                id="mapa-filtro-ano-inicio",
+                                options=[{"label": a, "value": a} for a in anos],
+                                value=anos[0], clearable=False,
+                                style={"width": "100px", "fontSize": 13},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("Ano Fim", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
+                            dcc.Dropdown(
+                                id="mapa-filtro-ano-fim",
+                                options=[{"label": a, "value": a} for a in anos],
+                                value=anos[-1], clearable=False,
+                                style={"width": "100px", "fontSize": 13},
+                            ),
+                        ]),
+                        html.Div([
+                            html.Label("Buscar município", style={"fontSize": 11, "fontWeight": 600, "color": "#4a5568"}),
+                            dcc.Input(
+                                id="mapa-busca-municipio",
+                                type="text",
+                                placeholder="Digite o nome...",
+                                debounce=True,
+                                style={"width": "220px", "fontSize": 13, "padding": "6px 12px",
+                                       "border": "1px solid #e2e8f0", "borderRadius": 6},
+                            ),
+                        ]),
+                    ], id="mapa-filtros-container", style={"display": "flex", "gap": 16, "marginTop": 12,
+                               "marginBottom": 8, "flexWrap": "wrap", "alignItems": "flex-end"}),
 
                     dcc.Graph(id="mapa-municipios",
                               figure=fig_mapa,
@@ -349,6 +386,9 @@ app.layout = html.Div(
                                       "modeBarButtonsToRemove": ["toImage", "lasso2d", "select2d"]}),
                 ]),
             ]),
+
+            # ── Gráfico de evolução ao clicar no município ────────────────────
+            html.Div(id="grafico-clique-municipio-container", style={"marginTop": 24}),
 
             # ── Análise por Município ─────────────────────────────────────────
             html.Div(style={"marginTop": 24}, children=[
@@ -427,33 +467,91 @@ app.layout = html.Div(
 )
 
 
-# ── Callback: Busca de município no mapa (destaque via Patch) ─────────────────
+# ── Callback: Mapa com filtro de doença, ano e busca ──────────────────────────
 @app.callback(
     Output("mapa-municipios", "figure"),
+    Input("mapa-filtro-doenca", "value"),
+    Input("mapa-filtro-ano-inicio", "value"),
+    Input("mapa-filtro-ano-fim", "value"),
     Input("mapa-busca-municipio", "value"),
 )
-def destacar_municipio_mapa(busca):
+def atualizar_mapa(doencas_sel, ano_inicio, ano_fim, busca):
+    # Filtrar df_mun conforme seleção
+    df = df_mun.copy()
+    if doencas_sel and len(doencas_sel) > 0:
+        df = df[df['doenca'].isin(doencas_sel)]
+    # Filtrar por intervalo de anos
+    if ano_inicio and ano_fim:
+        a_ini = str(min(int(ano_inicio), int(ano_fim)))
+        a_fim = str(max(int(ano_inicio), int(ano_fim)))
+        df = df[(df['ano'] >= a_ini) & (df['ano'] <= a_fim)]
+
+    # Agregar por município
+    df_agg = df.groupby('codigo_municipio', as_index=False)['casos_mes'].sum()
+    df_agg = df_agg.rename(columns={'casos_mes': 'total_casos'})
+
+    # Mapear cod6 -> total para z (proporcional à quantidade de casos)
+    cod6_totais = dict(zip(df_agg['codigo_municipio'], df_agg['total_casos']))
+
+    # Calcular z proporcional: 0=sem dados, 0.1-0.9=gradiente por casos, 1.0=destaque busca
+    max_casos = df_agg['total_casos'].max() if not df_agg.empty else 1
+    if max_casos == 0:
+        max_casos = 1
+
+    z_novo = []
+    for cod7 in geojson_ids:
+        cod6 = cod7[:6]
+        total = cod6_totais.get(cod6, 0)
+        if total > 0:
+            # Escala de 0.11 a 0.9 (proporcional ao log dos casos para melhor distribuição)
+            ratio = math.log1p(total) / math.log1p(max_casos)
+            z_novo.append(0.11 + ratio * 0.79)
+        else:
+            z_novo.append(0)
+
+    # Busca por nome (destaque = 1.0 = vermelho)
+    if busca and busca.strip():
+        termo = busca.strip().lower()
+        cod7s_match = set()
+        for nome, cod7_list in mapa_cod7_por_nome.items():
+            if termo in nome:
+                cod7s_match.update(cod7_list)
+        if cod7s_match:
+            z_novo = [1.0 if loc in cod7s_match else z_novo[i] for i, loc in enumerate(geojson_ids)]
+
+    # Rebuild hover com dados filtrados — detalhado por doença
+    nomes_mun = df_mun[['codigo_municipio', 'nome_municipio', 'uf']].drop_duplicates('codigo_municipio')
+    nomes_dict = dict(zip(nomes_mun['codigo_municipio'], nomes_mun[['nome_municipio', 'uf']].values.tolist()))
+
+    # Agregar por municipio E doença para hover detalhado
+    df_hover = df.groupby(['codigo_municipio', 'doenca'], as_index=False)['casos_mes'].sum()
+    hover_por_mun = {}
+    for _, row in df_hover.iterrows():
+        cod = row['codigo_municipio']
+        if cod not in hover_por_mun:
+            hover_por_mun[cod] = {}
+        hover_por_mun[cod][row['doenca']] = int(row['casos_mes'])
+
+    customdata_novo = []
+    for cod7 in geojson_ids:
+        cod6 = cod7[:6]
+        total = cod6_totais.get(cod6, 0)
+        info = nomes_dict.get(cod6, None)
+        if info and total > 0:
+            nome, uf = info
+            linhas = [f"<b>{nome}</b> ({uf})"]
+            doencas_mun = hover_por_mun.get(cod6, {})
+            for d in doencas:
+                val = doencas_mun.get(d, 0)
+                if val > 0:
+                    linhas.append(f"{nomes_exibicao[d]}: <b>{val:,.0f}</b>".replace(",", "."))
+            customdata_novo.append("<br>".join(linhas))
+        else:
+            customdata_novo.append("")
+
     patched = Patch()
-    if not busca or not busca.strip():
-        # Sem busca: volta ao z base
-        patched["data"][0]["z"] = mapa_z_base
-        return patched
-
-    termo = busca.strip().lower()
-    # Encontrar cod7s que batem com a busca
-    cod7s_match = set()
-    for nome, cod7_list in mapa_cod7_por_nome.items():
-        if termo in nome:
-            cod7s_match.update(cod7_list)
-
-    if not cod7s_match:
-        # Nenhum resultado: mantém base
-        patched["data"][0]["z"] = mapa_z_base
-        return patched
-
-    # z: 0=sem dados, 1=com dados, 2=destaque (município encontrado)
-    z_destaque = [2 if loc in cod7s_match else mapa_z_base[i] for i, loc in enumerate(geojson_ids)]
-    patched["data"][0]["z"] = z_destaque
+    patched["data"][0]["z"] = z_novo
+    patched["data"][0]["customdata"] = customdata_novo
     return patched
 
 
@@ -559,6 +657,128 @@ def atualizar_municipios(doenca_sel, regiao_sel, uf_sel, ano_sel, mes_sel):
     total = len(df)
     info = f"Exibindo {min(50, total)} de {total} município(s) · ordenado por total de casos"
     return grafico, tabela, info
+
+
+# ── Callback: Clique no mapa → gráfico de linhas por doença ──────────────────
+@app.callback(
+    Output("grafico-clique-municipio-container", "children"),
+    Input("mapa-municipios", "clickData"),
+    Input("mapa-filtro-doenca", "value"),
+    Input("mapa-filtro-ano-inicio", "value"),
+    Input("mapa-filtro-ano-fim", "value"),
+)
+def grafico_clique_municipio(click_data, doencas_sel, ano_inicio, ano_fim):
+    if not click_data:
+        return html.P("Clique em um município no mapa para ver a evolução por doença.",
+                      style={"fontSize": 13, "color": "#718096", "fontStyle": "italic", "padding": "20px"})
+
+    # Extrair cod7 do ponto clicado
+    try:
+        point = click_data["points"][0]
+        idx = point.get("pointIndex", point.get("pointNumber", None))
+        if idx is None:
+            return html.P("Não foi possível identificar o município.", style={"fontSize": 13, "color": "#C53030"})
+        cod7 = geojson_ids[idx]
+        cod6 = cod7[:6]
+    except (KeyError, IndexError, TypeError):
+        return html.P("Não foi possível identificar o município.", style={"fontSize": 13, "color": "#C53030"})
+
+    # Filtrar dados do município
+    df_local = df_mun[df_mun['codigo_municipio'] == cod6].copy()
+    if df_local.empty:
+        return html.P("Sem dados para este município.", style={"fontSize": 13, "color": "#C53030"})
+
+    # Aplicar filtro de doenças (acompanha o filtro do mapa)
+    if doencas_sel and len(doencas_sel) > 0:
+        df_local = df_local[df_local['doenca'].isin(doencas_sel)]
+
+    # Aplicar filtro de intervalo de anos (acompanha o filtro do mapa)
+    if ano_inicio and ano_fim:
+        a_ini = str(min(int(ano_inicio), int(ano_fim)))
+        a_fim = str(max(int(ano_inicio), int(ano_fim)))
+        df_local = df_local[(df_local['ano'] >= a_ini) & (df_local['ano'] <= a_fim)]
+
+    if df_local.empty:
+        return html.P("Sem dados para este município no período/doenças selecionados.",
+                      style={"fontSize": 13, "color": "#C53030"})
+
+    nome_mun = df_local['nome_municipio'].iloc[0]
+    uf_mun = df_local['uf'].iloc[0]
+
+    # Agregar por ano e doença (ou por mês se ano único)
+    ano_unico = (ano_inicio and ano_fim and str(ano_inicio) == str(ano_fim))
+
+    if ano_unico:
+        # Mostrar por mês
+        df_local['mes_int'] = df_local['mes'].astype(int)
+        df_ano_doenca = df_local.groupby(['mes_int', 'doenca'], as_index=False)['casos_mes'].sum()
+        df_ano_doenca = df_ano_doenca.rename(columns={'casos_mes': 'casos'})
+        df_ano_doenca = df_ano_doenca.sort_values('mes_int')
+        eixo_x = 'mes_int'
+        nomes_meses = {1: 'Jan', 2: 'Fev', 3: 'Mar', 4: 'Abr', 5: 'Mai', 6: 'Jun',
+                       7: 'Jul', 8: 'Ago', 9: 'Set', 10: 'Out', 11: 'Nov', 12: 'Dez'}
+    else:
+        df_ano_doenca = df_local.groupby(['ano', 'doenca'], as_index=False)['casos_mes'].sum()
+        df_ano_doenca = df_ano_doenca.rename(columns={'casos_mes': 'casos'})
+        df_ano_doenca['ano'] = df_ano_doenca['ano'].astype(int)
+        df_ano_doenca = df_ano_doenca.sort_values('ano')
+        eixo_x = 'ano'
+
+    # Gráfico de linhas — uma linha por doença
+    fig = go.Figure()
+    doencas_presentes = df_ano_doenca['doenca'].unique()
+    for d in doencas:
+        if d not in doencas_presentes:
+            continue
+        dados_d = df_ano_doenca[df_ano_doenca['doenca'] == d]
+        if dados_d['casos'].sum() == 0:
+            continue
+        if ano_unico:
+            x_vals = dados_d['mes_int']
+            hover_tpl = f"<b>{nomes_exibicao[d]}</b><br>%{{text}}: %{{y:,.0f}} casos<extra></extra>"
+            text_vals = [nomes_meses.get(m, str(m)) for m in dados_d['mes_int']]
+        else:
+            x_vals = dados_d['ano']
+            hover_tpl = f"<b>{nomes_exibicao[d]}</b><br>%{{x}}: %{{y:,.0f}} casos<extra></extra>"
+            text_vals = None
+
+        trace_kwargs = dict(
+            x=x_vals,
+            y=dados_d['casos'],
+            name=nomes_exibicao[d],
+            mode="lines+markers",
+            line=dict(color=COR_POR_DOENCA[d], width=2),
+            marker=dict(size=5),
+            hovertemplate=hover_tpl,
+        )
+        if text_vals:
+            trace_kwargs['text'] = text_vals
+        fig.add_trace(go.Scatter(**trace_kwargs))
+
+    # Configurar eixo X
+    if ano_unico:
+        xaxis_config = dict(showgrid=False, linecolor="#e0e0e0", dtick=1,
+                            tickvals=list(range(1, 13)),
+                            ticktext=[nomes_meses[m] for m in range(1, 13)],
+                            title=f"Meses de {ano_inicio}")
+    else:
+        xaxis_config = dict(showgrid=False, linecolor="#e0e0e0", dtick=1, tickformat="d")
+
+    fig.update_layout(
+        margin=dict(l=40, r=20, t=10, b=40),
+        plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+        font=dict(family="Inter, sans-serif", size=12, color="#333"),
+        xaxis=xaxis_config,
+        yaxis=dict(gridcolor="#f0f0f0", linecolor="#e0e0e0", title="Casos"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font_size=11),
+        height=400,
+        hoverlabel=dict(bgcolor="#fff", bordercolor="#ccc", font_size=12),
+    )
+
+    return _card([
+        _titulo(f"{nome_mun} ({uf_mun}) — Evolução de Casos por Doença"),
+        dcc.Graph(figure=fig, config={"displayModeBar": False}),
+    ])
 
 
 if __name__ == "__main__":
